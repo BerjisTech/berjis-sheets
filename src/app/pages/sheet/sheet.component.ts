@@ -5,7 +5,7 @@ import { CommonModule } from '@angular/common';
   standalone: true,
   selector: 'app-sheet',
   imports: [CommonModule],
-  template: `<div class="border rounded p-4">Sheets grid placeholder (collab-ready slot)</div>`
+  templateUrl: './sheet.component.html'
 })
 export class SheetPageComponent {}
 
