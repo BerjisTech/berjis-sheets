@@ -1,13 +1,13 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { SheetsService, SheetDoc, defaultGrid } from '../../sheets.service';
 
 @Component({
   standalone: true,
   selector: 'app-sheet',
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, RouterLink],
   templateUrl: './sheet.component.html'
 })
 export class SheetPageComponent implements OnInit {
