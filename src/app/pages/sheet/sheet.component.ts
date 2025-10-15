@@ -14,8 +14,63 @@ export class SheetPageComponent implements OnInit {
   sheet: SheetDoc | null = null;
   grid: string[][] = defaultGrid();
   pendingSave?: any;
+  contextMenus: { name: string, menus: { icon: string, name: string, action: string }[] }[] = [
+    {
+      name: 'File',
+      menus: [
+        { icon: '', name: 'New', action: '' },
+        { icon: '', name: 'Open', action: '' },
+        { icon: '', name: 'Duplicate', action: '' },
+        { icon: '', name: 'Share', action: '' },
+        { icon: '', name: 'Email', action: '' },
+        { icon: '', name: 'Export', action: '' }
+      ]
+    },
+    {
+      name: 'Edit',
+      menus: [
+        { icon: '', name: '', action: '' }
+      ]
+    },
+    {
+      name: 'View',
+      menus: [
+        { icon: '', name: '', action: '' }
+      ]
+    },
+    {
+      name: 'Insert',
+      menus: [
+        { icon: '', name: '', action: '' }
+      ]
+    },
+    {
+      name: 'Format',
+      menus: [
+        { icon: '', name: '', action: '' }
+      ]
+    },
+    {
+      name: 'Tools',
+      menus: [
+        { icon: '', name: '', action: '' }
+      ]
+    },
+    {
+      name: 'Extensions',
+      menus: [
+        { icon: '', name: '', action: '' }
+      ]
+    },
+    {
+      name: 'Help',
+      menus: [
+        { icon: '', name: '', action: '' }
+      ]
+    },
+  ]
 
-  constructor(private route: ActivatedRoute, private router: Router, public sheets: SheetsService) {}
+  constructor(private route: ActivatedRoute, private router: Router, public sheets: SheetsService) { }
 
   async ngOnInit() {
     const id = this.route.snapshot.paramMap.get('id') || 'new';
@@ -27,15 +82,15 @@ export class SheetPageComponent implements OnInit {
     this.grid = (this.sheet?.data as string[][]) || defaultGrid();
   }
 
-  onTitleChange(){ this.queueSave(); }
-  onCellChange(r: number, c: number, val: string){ if (!this.sheet) return; this.grid[r][c] = val; this.sheet.data = this.grid; this.queueSave(); }
+  onTitleChange() { this.queueSave(); }
+  onCellChange(r: number, c: number, val: string) { if (!this.sheet) return; this.grid[r][c] = val; this.sheet.data = this.grid; this.queueSave(); }
 
-  addRow(){ this.grid.push(Array.from({length: this.grid[0]?.length||10}, ()=>'') ); this.sheet!.data = this.grid; this.queueSave(); }
-  addCol(){ for (const row of this.grid) row.push(''); this.sheet!.data = this.grid; this.queueSave(); }
+  addRow() { this.grid.push(Array.from({ length: this.grid[0]?.length || 10 }, () => '')); this.sheet!.data = this.grid; this.queueSave(); }
+  addCol() { for (const row of this.grid) row.push(''); this.sheet!.data = this.grid; this.queueSave(); }
 
-  private queueSave(){ if (!this.sheet) return; if (this.pendingSave) clearTimeout(this.pendingSave); this.pendingSave = setTimeout(()=> this.save(), 400); }
-  private async ensureCreatedId(){ if (this.sheet && this.sheet.id==='new') { const hasTitle = !!this.sheet.title && this.sheet.title.trim().length>0; const hasData = JSON.stringify(this.grid).length>2; if (hasTitle || hasData) { const created = await this.sheets.create({ title: this.sheet.title, data: this.grid }); this.sheet = created; this.router.navigate(['/sheet', created.id], { replaceUrl: true }); } } }
-  private async save(){ if (!this.sheet) return; await this.ensureCreatedId(); if (!this.sheet) return; this.sheet.data = this.grid; await this.sheets.save(this.sheet); }
+  private queueSave() { if (!this.sheet) return; if (this.pendingSave) clearTimeout(this.pendingSave); this.pendingSave = setTimeout(() => this.save(), 400); }
+  private async ensureCreatedId() { if (this.sheet && this.sheet.id === 'new') { const hasTitle = !!this.sheet.title && this.sheet.title.trim().length > 0; const hasData = JSON.stringify(this.grid).length > 2; if (hasTitle || hasData) { const created = await this.sheets.create({ title: this.sheet.title, data: this.grid }); this.sheet = created; this.router.navigate(['/sheet', created.id], { replaceUrl: true }); } } }
+  private async save() { if (!this.sheet) return; await this.ensureCreatedId(); if (!this.sheet) return; this.sheet.data = this.grid; await this.sheets.save(this.sheet); }
 
   colLabel(i: number): string { return String.fromCharCode(65 + (i % 26)); }
 
