@@ -53,7 +53,7 @@
       <col *ngFor="let _ of (grid && grid[0] ? grid[0] : []); let ci = index" [style.width.px]="colWidths[ci]" />
     </colgroup>
     <thead>
-      <tr>
+      <tr #headerRow>
         <th class="border py-1 bg-gray-50 w-[10px]"></th>
         <th class="border px-2 py-1 bg-gray-50 relative select-none" *ngFor="let _ of (grid && grid[0] ? grid[0] : []); let ci = index" [style.width.px]="colWidths[ci]" (click)="selectColumn(ci)" (contextmenu)="openContext($event, 'col', undefined, ci)">
           {{ colLabel(ci) }}
@@ -94,6 +94,8 @@
       <!-- Bottom spacer -->
       <tr *ngIf="bottomSpacer > 0"><td class="p-0" [attr.colspan]="(grid[0]?.length||0)+1" [style.height.px]="bottomSpacer"></td></tr>
     </tbody>
+    <!-- Selection dashed outline overlay -->
+    <div *ngIf="selectionRect" class="absolute pointer-events-none border-2 border-dashed border-blue-500" [style.left.px]="selectionRect.x" [style.top.px]="selectionRect.y" [style.width.px]="selectionRect.w" [style.height.px]="selectionRect.h"></div>
   </table>
 </div>
 

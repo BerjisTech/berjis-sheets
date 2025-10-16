@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { SheetsService, SheetDoc, defaultGrid } from '../../sheets.service';
+type CellMeta = { align?: 'left'|'center'|'right', format?: 'text'|'number'|'date', numberPreset?: 'num0'|'num2'|'currencyUSD'|'percent', datePreset?: 'dateISO'|'dateMDY' };
 
 @Component({
   standalone: true,
@@ -10,10 +11,11 @@ import { SheetsService, SheetDoc, defaultGrid } from '../../sheets.service';
   imports: [CommonModule, FormsModule, RouterLink],
   templateUrl: './sheet.component.html'
 })
+
 export class SheetPageComponent implements OnInit, AfterViewInit {
   sheet: SheetDoc | null = null;
   grid: string[][] = defaultGrid();
-  meta: ({ align?: 'left'|'center'|'right', format?: 'text'|'number'|'date' } | null)[][] = [];
+  meta: (CellMeta | null)[][] = [];
   pendingSave?: any;
   openModal = false;
   openId = '';
@@ -141,6 +143,8 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
       this.editorMainPane?.nativeElement?.addEventListener('scroll', () => this.updateViewport());
       window.addEventListener('mouseup', () => this.onGlobalMouseUp());
       window.addEventListener('mousemove', (e) => this.onGlobalMouseMove(e));
+      this.headerHeight = this.headerRow?.nativeElement?.offsetHeight || this.headerHeight;
+      window.addEventListener('resize', () => { this.headerHeight = this.headerRow?.nativeElement?.offsetHeight || this.headerHeight; });
       this.updateViewport();
     }, 0);
   }
@@ -263,6 +267,7 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
 
   // Viewport virtualization
   @ViewChild('editorMainPane') editorMainPane?: ElementRef<HTMLDivElement>;
+  @ViewChild('headerRow') headerRow?: ElementRef<HTMLTableRowElement>;
   defaultRowHeight = 32; // px
   defaultColWidth = 96;  // px
   rowHeights: number[] = [];
@@ -273,6 +278,7 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
   topSpacer = 0;
   bottomSpacer = 0;
   get totalTableWidth(): number { try { return 40 + (this.colWidths?.reduce((a,b)=>a+(b||this.defaultColWidth),0)||0); } catch { return 40 + (this.grid[0]?.length||0)*this.defaultColWidth; } }
+  headerHeight = 28;
 
   private initSizing() {
     const rows = this.grid.length;
@@ -375,6 +381,29 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
   isCellMulti(ri: number, ci: number): boolean { return this.multiSelected.has(`${ri}-${ci}`); }
   isCellSelected(ri: number, ci: number): boolean { return this.isCellActive(ri, ci) || this.isCellInRange(ri, ci) || this.isCellMulti(ri, ci); }
   private initMeta(){ const rows = this.grid.length, cols = this.grid[0]?.length || 0; this.meta = Array.from({ length: rows }, () => Array.from({ length: cols }, () => null)); }
+  get selectionRect(): { x: number, y: number, w: number, h: number } | null {
+    let r1: number, r2: number, c1: number, c2: number;
+    if (this.rangeStart && this.rangeEnd){
+      r1 = Math.min(this.rangeStart.r, this.rangeEnd.r);
+      r2 = Math.max(this.rangeStart.r, this.rangeEnd.r);
+      c1 = Math.min(this.rangeStart.c, this.rangeEnd.c);
+      c2 = Math.max(this.rangeStart.c, this.rangeEnd.c);
+    } else if (this.activeCell){ r1 = r2 = this.activeCell.r; c1 = c2 = this.activeCell.c; }
+    else return null;
+    // Bounds checks
+    r1 = Math.max(0, Math.min(this.grid.length-1, r1));
+    r2 = Math.max(0, Math.min(this.grid.length-1, r2));
+    const maxC = Math.max(0, (this.grid[0]?.length||1)-1);
+    c1 = Math.max(0, Math.min(maxC, c1));
+    c2 = Math.max(0, Math.min(maxC, c2));
+    // Positioning relative to table
+    const left = 40 + this.sumWidths(0, c1-1);
+    const width = this.sumWidths(c1, c2);
+    const top = (this.headerHeight || 28) + (this.rowOffsets[r1] || 0);
+    const height = (this.rowOffsets[r2+1] || this.rowOffsets[r2] + (this.rowHeights[r2]||this.defaultRowHeight)) - (this.rowOffsets[r1] || 0);
+    return { x: left, y: top, w: width, h: height };
+  }
+  private sumWidths(start: number, end: number): number { if (end < start) return 0; let sum = 0; for (let i=start; i<=end; i++) sum += this.colWidths[i] || this.defaultColWidth; return sum; }
   private clearSelectionValues(){
     if (this.rangeStart && this.rangeEnd){
       const r1 = Math.min(this.rangeStart.r, this.rangeEnd.r);
@@ -642,6 +671,14 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
       items.push({ label: 'Format as number', key: 'fmtNumber' });
       items.push({ label: 'Format as date', key: 'fmtDate' });
       items.push({ divider: true });
+      items.push({ label: 'Number: 0 decimals', key: 'num0' });
+      items.push({ label: 'Number: 2 decimals', key: 'num2' });
+      items.push({ label: 'Number: Currency (USD)', key: 'currencyUSD' });
+      items.push({ label: 'Number: Percent', key: 'percent' });
+      items.push({ divider: true });
+      items.push({ label: 'Date: YYYY-MM-DD', key: 'dateISO' });
+      items.push({ label: 'Date: MM/DD/YYYY', key: 'dateMDY' });
+      items.push({ divider: true });
       items.push({ label: 'Align left', key: 'alignLeft' });
       items.push({ label: 'Align center', key: 'alignCenter' });
       items.push({ label: 'Align right', key: 'alignRight' });
@@ -705,6 +742,12 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
       case 'fmtDate': this.applyFormatToSelection('date'); break;
       case 'fmtNumber': this.applyFormatToSelection('number'); break;
       case 'fmtText': this.applyFormatToSelection('text'); break;
+      case 'num0': this.applyNumberPresetToSelection('num0'); break;
+      case 'num2': this.applyNumberPresetToSelection('num2'); break;
+      case 'currencyUSD': this.applyNumberPresetToSelection('currencyUSD'); break;
+      case 'percent': this.applyNumberPresetToSelection('percent'); break;
+      case 'dateISO': this.applyDatePresetToSelection('dateISO'); break;
+      case 'dateMDY': this.applyDatePresetToSelection('dateMDY'); break;
       case 'alignLeft': this.applyAlignToSelection('left'); break;
       case 'alignCenter': this.applyAlignToSelection('center'); break;
       case 'alignRight': this.applyAlignToSelection('right'); break;
@@ -719,6 +762,14 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
   }
   private applyFormatToSelection(format: 'text'|'number'|'date'){
     this.forEachSelectedCell((r,c) => { const m = (this.meta[r] ||= []); m[c] = { ...(m[c]||{}), format }; });
+    this.sheet!.data = this.packData(); this.queueSave();
+  }
+  private applyNumberPresetToSelection(preset: 'num0'|'num2'|'currencyUSD'|'percent'){
+    this.forEachSelectedCell((r,c) => { const m = (this.meta[r] ||= []); m[c] = { ...(m[c]||{}), format: 'number', numberPreset: preset }; });
+    this.sheet!.data = this.packData(); this.queueSave();
+  }
+  private applyDatePresetToSelection(preset: 'dateISO'|'dateMDY'){
+    this.forEachSelectedCell((r,c) => { const m = (this.meta[r] ||= []); m[c] = { ...(m[c]||{}), format: 'date', datePreset: preset }; });
     this.sheet!.data = this.packData(); this.queueSave();
   }
   private forEachSelectedCell(fn: (r:number,c:number)=>void){
