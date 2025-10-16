@@ -59,12 +59,12 @@
       </div>
     </div>
     <div class="w-full grid grid-cols-5 auto-rows-[300px] gap-3">
-      <a [routerLink]="['/sheet', s.id]" *ngFor="let s of recents"
+      <a *ngFor="let s of recents" [routerLink]="['/sheet', s.id]"
         class="shadow rounded bg-slate-50 flex flex-col p-2 cursor-pointer hover:shadow-xl">
         <div class="font-medium">{{ s.title }}</div>
         <div class="flex-grow"></div>
-        <div class="text-xs text-gray-500">Updated {{ d.updatedAt | date:'medium' }}</div>
-        <a [routerLink]="['/sheet', s.id]" class="text-blue-600 text-sm">Open</a>
+        <div class="text-xs text-gray-500">Updated {{ s.updatedAt | date:'medium' }}</div>
+        <span class="text-blue-600 text-sm">Open</span>
       </a>
     </div>
   </div>

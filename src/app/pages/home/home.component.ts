@@ -18,7 +18,7 @@ export class HomePageComponent {
     try {
       const res = await this.api.ensureAuth();
       this.authed = !!res?.data?.valid;
-      if (this.authed) { this.recents = await this.sheets.list(['active']); }
+      if (this.authed) { console.log(this.recents.filter(e => e.title)); this.recents = await this.sheets.list(['active']); }
     } catch { this.authed = false; }
   }
 }
