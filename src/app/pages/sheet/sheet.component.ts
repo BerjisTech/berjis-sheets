@@ -153,6 +153,7 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
       window.addEventListener('mouseup', () => this.onGlobalMouseUp());
       window.addEventListener('mousemove', (e) => { this.onGlobalMouseMove(e); if (this.draggingFill) { this.updateFillPreview(e); } });
       window.addEventListener('mouseup', (e) => { if (this.draggingFill) this.applyFill(e); });
+      window.addEventListener('keydown', (e) => this.onGlobalKeyDown(e));
       this.headerHeight = this.headerRow?.nativeElement?.offsetHeight || this.headerHeight;
       window.addEventListener('resize', () => { this.headerHeight = this.headerRow?.nativeElement?.offsetHeight || this.headerHeight; });
       this.updateViewport();
@@ -606,6 +607,31 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
   deleteSheet(i: number){ if (this.tabs.length<=1) return; this.tabs.splice(i,1); if (this.activeTabIndex>=this.tabs.length) this.activeTabIndex=this.tabs.length-1; this.applyActiveSheet(); this.queueSave(); }
   duplicateSheet(i: number){ const s = this.tabs[i]; const copy: SheetData = { name: s.name + ' (Copy)', color: s.color, grid: s.grid.map(row=>row.slice()), colWidths: s.colWidths.slice(), rowHeights: s.rowHeights.slice(), meta: s.meta.map(r=>r.map(c=> c ? { ...c } : null)) }; this.tabs.splice(i+1, 0, copy); this.setActiveSheet(i+1); }
 
+  // Tab drag & drop reorder
+  private dragTabIndex: number | null = null;
+  onTabDragStart(ev: DragEvent, i: number){ this.dragTabIndex = i; ev.dataTransfer?.setData('text/plain', String(i)); ev.dataTransfer!.effectAllowed = 'move'; }
+  onTabDragOver(ev: DragEvent, _i: number){ ev.preventDefault(); ev.dataTransfer!.dropEffect = 'move'; }
+  onTabDrop(ev: DragEvent, i: number){ ev.preventDefault(); const from = this.dragTabIndex ?? parseInt(ev.dataTransfer?.getData('text/plain')||'-1',10); if (Number.isNaN(from) || from<0 || from>=this.tabs.length) { this.dragTabIndex=null; return; } if (from===i) { this.dragTabIndex=null; return; } const [moved]=this.tabs.splice(from,1); this.tabs.splice(i,0,moved); this.dragTabIndex=null; const newActive = this.tabs.indexOf(moved); this.setActiveSheet(newActive); }
+
+  // Keyboard navigation between tabs
+  onGlobalKeyDown(e: KeyboardEvent){
+    if (!(e.ctrlKey || (e as any).metaKey)) return;
+    if (e.key === 'PageDown' || e.key === 'PageUp'){
+      e.preventDefault();
+      const len = this.tabs.length; if (!len) return;
+      let idx = this.activeTabIndex + (e.key === 'PageDown' ? 1 : -1);
+      if (idx < 0) idx = len - 1; if (idx >= len) idx = 0;
+      this.setActiveSheet(idx);
+    }
+  }
+
+  // Delete confirmation
+  confirmDeleteOpen = false; deleteIndex: number | null = null; deleteName = ''; deleteNonEmpty = false;
+  openDeleteConfirm(i: number){ const s=this.tabs[i]; if (!s) return; const nonEmpty = this.isSheetNonEmpty(s); if (!nonEmpty) { this.deleteSheet(i); return; } this.deleteIndex=i; this.deleteName=s.name; this.deleteNonEmpty=true; this.confirmDeleteOpen=true; }
+  cancelDelete(){ this.confirmDeleteOpen=false; this.deleteIndex=null; this.deleteName=''; this.deleteNonEmpty=false; }
+  confirmDelete(){ if (this.deleteIndex==null) return; this.deleteSheet(this.deleteIndex); this.cancelDelete(); }
+  private isSheetNonEmpty(s: SheetData): boolean { for (let r=0; r<s.grid.length; r++){ const row=s.grid[r]; for (let c=0; c<row.length; c++){ if ((row[c]||'').length>0) return true; } } return false; }
+
   // Measure helpers
   private measureCtx?: CanvasRenderingContext2D;
   private ensureMeasureCtx() {
@@ -851,7 +877,7 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
       switch(item.key){
         case 'tabRename': this.renameSheet(idx); break;
         case 'tabDuplicate': this.duplicateSheet(idx); break;
-        case 'tabDelete': this.deleteSheet(idx); break;
+        case 'tabDelete': this.openDeleteConfirm(idx); break;
         case 'tabMoveLeft': if (idx>0){ const [s]=this.tabs.splice(idx,1); this.tabs.splice(idx-1,0,s); this.setActiveSheet(idx-1); } break;
         case 'tabMoveRight': if (idx<this.tabs.length-1){ const [s]=this.tabs.splice(idx,1); this.tabs.splice(idx+1,0,s); this.setActiveSheet(idx+1); } break;
         default:
