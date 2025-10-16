@@ -116,20 +116,33 @@
 
 <!-- Context Menu -->
 <div *ngIf="contextOpen" class="fixed inset-0 z-[60000]" (click)="closeContext()">
-  <div class="absolute bg-white shadow rounded border text-sm py-1 min-w-[220px]" [style.left.px]="contextX" [style.top.px]="contextY" (click)="$event.stopPropagation()">
+  <div class="absolute bg-white rounded-lg shadow-lg shadow-black/10 border border-gray-200 text-sm py-1 min-w-[220px]" [style.left.px]="contextX" [style.top.px]="contextY" (click)="$event.stopPropagation()">
     <div *ngFor="let item of contextItems" class="relative">
-      <div *ngIf="item.divider" class="my-1 border-t"></div>
+      <div *ngIf="item.divider" class="my-1 border-t border-gray-200"></div>
       <button *ngIf="!item.divider" class="w-full text-left px-3 py-1 hover:bg-slate-100 flex items-center justify-between" (click)="!item.children && onContextAction(item)" (mouseenter)="openSubmenu(item, $event)" (mouseleave)="maybeCloseSubmenu($event)">
         <span>{{ item.label }}</span>
         <span *ngIf="item.children">▶</span>
       </button>
     </div>
     <!-- Submenu -->
-    <div *ngIf="submenu && submenu.items && submenu.items.length" class="absolute bg-white shadow rounded border text-sm py-1 min-w-[200px]" [style.left.px]="submenu.x" [style.top.px]="submenu.y">
+    <div *ngIf="submenu && submenu.items && submenu.items.length" class="absolute bg-white rounded-lg shadow-lg shadow-black/10 border border-gray-200 text-sm py-1 min-w-[200px]" [style.left.px]="submenu.x" [style.top.px]="submenu.y">
       <button *ngFor="let si of submenu.items" class="block w-full text-left px-3 py-1 hover:bg-slate-100" (click)="onContextAction(si)">{{ si.label }}</button>
     </div>
   </div>
-  </div>
+</div>
+
+<!-- Tabs Bar -->
+  <div class="mt-2 bg-gray-50 border-t border-gray-200 flex items-center gap-2 px-2 py-1 overflow-x-auto">
+  <button *ngFor="let s of tabs; let i=index" class="px-3 py-1 rounded flex items-center gap-2"
+          [class.bg-white]="i===activeTabIndex" [class.shadow]="i===activeTabIndex" [class.border]="i===activeTabIndex"
+          (click)="setActiveSheet(i)" (dblclick)="renameSheet(i)">
+    <span class="truncate max-w-[160px]">{{ s.name }}</span>
+    <span *ngIf="tabs.length>1" class="text-gray-400 hover:text-red-600" (click)="$event.stopPropagation(); deleteSheet(i)">✕</span>
+  </button>
+  <button class="ml-1 px-2 py-1 border rounded bg-white" (click)="addSheet()">+ Add sheet</button>
+  <div class="flex-grow"></div>
+  <div class="text-xs text-gray-500 pr-2">Sheets</div>
+</div>
 
 <!-- Open Modal -->
 <div *ngIf="openModal" class="fixed inset-0 bg-black/30 flex items-center justify-center z-[60000]">

@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { SheetsService, SheetDoc, defaultGrid } from '../../sheets.service';
 type CellMeta = { align?: 'left'|'center'|'right', format?: 'text'|'number'|'date', numberPreset?: 'num0'|'num2'|'currencyUSD'|'percent', datePreset?: 'dateISO'|'dateMDY' };
+type SheetData = { name: string; grid: string[][]; colWidths: number[]; rowHeights: number[]; meta: (CellMeta|null)[][] };
 
 @Component({
   standalone: true,
@@ -16,6 +17,8 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
   sheet: SheetDoc | null = null;
   grid: string[][] = defaultGrid();
   meta: (CellMeta | null)[][] = [];
+  tabs: SheetData[] = [];
+  activeTabIndex = 0;
   pendingSave?: any;
   openModal = false;
   openId = '';
@@ -118,21 +121,27 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
       if (existing) this.sheet = existing; else { this.router.navigate(['/']); return; }
     }
     const data: any = this.sheet?.data;
-    if (Array.isArray(data)) {
-      this.grid = data as string[][];
-      this.initSizing();
-      this.initMeta();
+    if (data && Array.isArray(data.sheets)) {
+      // New multi-sheet format
+      this.tabs = data.sheets as SheetData[];
+      this.activeTabIndex = Math.min(Math.max(0, data.activeSheetIndex|0), this.tabs.length-1);
+      this.applyActiveSheet();
+    } else if (Array.isArray(data)) {
+      // Legacy: raw grid only
+      this.tabs = [ this.makeSheet('Sheet1', data as string[][]) ];
+      this.activeTabIndex = 0; this.applyActiveSheet();
     } else if (data && Array.isArray(data.grid)) {
-      this.grid = data.grid as string[][];
-      this.colWidths = Array.isArray(data.colWidths) && data.colWidths.length ? data.colWidths.slice() : Array.from({ length: this.grid[0]?.length || 0 }, () => this.defaultColWidth);
-      this.rowHeights = Array.isArray(data.rowHeights) && data.rowHeights.length ? data.rowHeights.slice() : Array.from({ length: this.grid.length }, () => this.defaultRowHeight);
-      this.recomputeRowOffsets();
-      this.meta = Array.isArray((data as any).meta) ? (data as any).meta : [];
-      if (!this.meta.length) this.initMeta();
+      // Legacy: single sheet object
+      const grid = data.grid as string[][];
+      const colWidths = Array.isArray(data.colWidths) && data.colWidths.length ? data.colWidths.slice() : Array.from({ length: grid[0]?.length || 0 }, () => this.defaultColWidth);
+      const rowHeights = Array.isArray(data.rowHeights) && data.rowHeights.length ? data.rowHeights.slice() : Array.from({ length: grid.length }, () => this.defaultRowHeight);
+      const meta = Array.isArray((data as any).meta) ? (data as any).meta : Array.from({ length: grid.length }, () => Array.from({ length: grid[0]?.length||0 }, () => null));
+      this.tabs = [ { name: 'Sheet1', grid, colWidths, rowHeights, meta } ];
+      this.activeTabIndex=0; this.applyActiveSheet();
     } else {
-      this.grid = defaultGrid();
-      this.initSizing();
-      this.initMeta();
+      // New default
+      this.tabs = [ this.makeSheet('Sheet1', defaultGrid()) ];
+      this.activeTabIndex=0; this.applyActiveSheet();
     }
     this.updateViewport();
   }
@@ -573,8 +582,22 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
 
   // Persist sizes with data when saving
   private packData(){
-    return { grid: this.grid, colWidths: this.colWidths, rowHeights: this.rowHeights, meta: this.meta };
+    // sync current active references back into sheets
+    this.tabs[this.activeTabIndex] = { name: this.tabs[this.activeTabIndex]?.name || `Sheet${this.activeTabIndex+1}`, grid: this.grid, colWidths: this.colWidths, rowHeights: this.rowHeights, meta: this.meta };
+    return { sheets: this.tabs, activeSheetIndex: this.activeTabIndex };
   }
+
+  private makeSheet(name: string, grid: string[][]): SheetData {
+    const colWidths = Array.from({ length: grid[0]?.length || 0 }, () => this.defaultColWidth);
+    const rowHeights = Array.from({ length: grid.length }, () => this.defaultRowHeight);
+    const meta = Array.from({ length: grid.length }, () => Array.from({ length: grid[0]?.length || 0 }, () => null));
+    return { name, grid, colWidths, rowHeights, meta };
+  }
+  setActiveSheet(i: number){ if (i<0 || i>=this.tabs.length) return; this.activeTabIndex = i; this.applyActiveSheet(); this.updateViewport(); this.queueSave(); }
+  private applyActiveSheet(){ const s = this.tabs[this.activeTabIndex]; this.grid = s.grid; this.colWidths = s.colWidths; this.rowHeights = s.rowHeights; this.meta = s.meta; this.recomputeRowOffsets(); }
+  addSheet(){ const n = this.tabs.length+1; const s = this.makeSheet(`Sheet${n}`, defaultGrid(1000,26)); this.tabs.push(s); this.setActiveSheet(this.tabs.length-1); }
+  renameSheet(i: number){ const cur = this.tabs[i]?.name || `Sheet${i+1}`; const name = prompt('Rename sheet', cur); if (name!=null) { this.tabs[i].name = name.trim() || cur; this.queueSave(); } }
+  deleteSheet(i: number){ if (this.tabs.length<=1) return; this.tabs.splice(i,1); if (this.activeTabIndex>=this.tabs.length) this.activeTabIndex=this.tabs.length-1; this.applyActiveSheet(); this.queueSave(); }
 
   // Measure helpers
   private measureCtx?: CanvasRenderingContext2D;
