@@ -81,7 +81,6 @@ export class SheetsService {
   private uuid(): string { return 's_' + Math.random().toString(36).slice(2) + Date.now().toString(36); }
 }
 
-export function defaultGrid(rows=200, cols=200): string[][] {
+export function defaultGrid(rows=1000, cols=26): string[][] {
   return Array.from({length: rows}, () => Array.from({length: cols}, () => ''));
 }
-

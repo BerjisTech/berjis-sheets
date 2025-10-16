@@ -1,4 +1,4 @@
-<div class="w-full h-[145px] overflow-hidden ps-[30px] p-3">
+<div class="w-full h-[145px] overflow-visible ps-[30px] p-3 relative z-20">
   <div class="h-[70px] flex items-center justify-start gap-3">
     <a href="/" class="h-full w-[70px] bg-blue-400 rounded flex items-center justify-center">Icon</a>
     <div class="flex-grow">
@@ -22,8 +22,9 @@
           class="group hover:bg-slate-200 px-3 rounded hover:shadow cursor-pointer relative">
           {{contextMenu.name}}
           <div
-            class="hidden group-hover:block absolute top-[100%] left-0 rounded shadow bg-white z-[50000] overflow-hidden">
-            <div *ngFor="let menu of contextMenu.menus" class="p-2 hover:bg-slate-200 cursor-pointer">{{menu.name}}
+            class="hidden group-hover:block absolute top-[100%] left-0 rounded shadow bg-white z-[50000] overflow-visible">
+            <div *ngFor="let menu of contextMenu.menus" class="p-2 hover:bg-slate-200 cursor-pointer"
+              (click)="onMenu(menu.action); $event.stopPropagation();">{{menu.name}}
             </div>
           </div>
         </span>
@@ -45,24 +46,82 @@
 
 </div>
 
-<div #editorMainPane class="h-[calc(100vh-155px)] mt-2 z-[1] overflow-auto bg-white">
-  <table class="min-w-full text-sm !table-fixed border-collapse">
+<div #editorMainPane class="h-[calc(100vh-155px)] mt-2 z-[1] overflow-auto bg-white" (mouseup)="endResizing()">
+  <table class="text-sm table-fixed border-collapse relative" [style.width.px]="totalTableWidth">
+    <colgroup>
+      <col [style.width.px]="40" />
+      <col *ngFor="let _ of (grid && grid[0] ? grid[0] : []); let ci = index" [style.width.px]="colWidths[ci]" />
+    </colgroup>
     <thead>
       <tr>
         <th class="border py-1 bg-gray-50 w-[10px]"></th>
-        <th class="border px-2 py-1 bg-gray-50 w-24" *ngFor="let _ of (grid && grid[0] ? grid[0] : []); let ci = index">
-          {{ colLabel(ci) }}</th>
+        <th class="border px-2 py-1 bg-gray-50 relative select-none" *ngFor="let _ of (grid && grid[0] ? grid[0] : []); let ci = index" [style.width.px]="colWidths[ci]" (click)="selectColumn(ci)">
+          {{ colLabel(ci) }}
+          <div class="absolute -right-1 top-0 h-full w-2 cursor-col-resize z-10" (mousedown)="startColResize(ci, $event)" (dblclick)="autoSizeCol(ci)"></div>
+        </th>
       </tr>
     </thead>
     <tbody *ngIf="grid && grid.length">
-      <tr *ngFor="let row of grid; let ri = index; trackBy: trackRow">
-        <th class="border px-2 py-1 bg-gray-50 text-right w-[10px]">{{ ri+1 }}</th>
-        <td class="border p-0" *ngFor="let cell of row; let ci = index; trackBy: trackCol">
-          <input class="w-full px-2 py-1 outline-none h-8" [(ngModel)]="grid[ri][ci]"
-            [ngModelOptions]="{standalone: true}" (ngModelChange)="queueSave()"
-            (keydown)="onCellKeydown($event, ri, ci)" autocomplete="off" spellcheck="false" />
+      <!-- Top spacer -->
+      <tr *ngIf="topSpacer > 0"><td class="p-0" [attr.colspan]="(grid[0]?.length||0)+1" [style.height.px]="topSpacer"></td></tr>
+
+      <tr *ngFor="let v of visibleRows; let i = index; trackBy: trackVisibleRow">
+        <th class="border px-2 py-1 bg-gray-50 text-right w-[10px] relative select-none" [style.height.px]="rowHeights[v.ri]" (click)="selectRow(v.ri)">
+          {{ v.ri+1 }}
+          <div class="absolute left-0 bottom-0 h-1 w-full cursor-row-resize" (mousedown)="startRowResize(v.ri, $event)" (dblclick)="autoSizeRow(v.ri)"></div>
+        </th>
+        <td class="border p-0"
+            *ngFor="let cell of v.row; let ci = index; trackBy: trackCol"
+            [class.bg-blue-50]="isCellSelected(v.ri, ci)"
+            [class.outline]="isCellActive(v.ri, ci)"
+            [class.outline-blue-500]="isCellActive(v.ri, ci)"
+            [class.outline-2]="isCellActive(v.ri, ci)"
+            (mousedown)="onCellMouseDown($event, v.ri, ci)"
+            (mouseenter)="onCellMouseEnter(v.ri, ci)">
+          <input class="w-full px-2 py-1 outline-none"
+            [(ngModel)]="grid[v.ri][ci]"
+            [ngModelOptions]="{standalone: true}"
+            (ngModelChange)="queueSave()"
+            [style.height.px]="rowHeights[v.ri]"
+            (keydown)="onCellKeydown($event, v.ri, ci)" [attr.data-rc]="v.ri+'-'+ci" autocomplete="off" spellcheck="false" />
         </td>
       </tr>
+
+      <!-- Bottom spacer -->
+      <tr *ngIf="bottomSpacer > 0"><td class="p-0" [attr.colspan]="(grid[0]?.length||0)+1" [style.height.px]="bottomSpacer"></td></tr>
     </tbody>
   </table>
+</div>
+
+<!-- Open Modal -->
+<div *ngIf="openModal" class="fixed inset-0 bg-black/30 flex items-center justify-center z-[60000]">
+  <div class="bg-white rounded shadow w-[900px] max-w-[90vw] p-5">
+    <div class="flex items-center justify-between mb-3">
+      <div class="text-lg font-semibold">Open Sheet</div>
+      <button class="px-2 py-1 border rounded" (click)="cancelOpen()">Close</button>
+    </div>
+    <input class="w-full border rounded px-3 py-2 mb-4" [(ngModel)]="openQuery" (ngModelChange)="onOpenQueryChange()"
+      placeholder="Search by title or cell content" />
+    <div class="grid grid-cols-5 auto-rows-[220px] gap-3">
+      <a (click)="openSheet(s)" *ngFor="let s of openFiltered" class="shadow rounded bg-slate-50 flex flex-col p-2 cursor-pointer hover:shadow-xl">
+        <div class="font-medium truncate">{{ s.title || 'Untitled' }}</div>
+        <div class="text-xs text-gray-500 mt-1">{{ s.updatedAt | date:'medium' }}</div>
+        <div class="flex-grow"></div>
+        <div class="text-blue-600 text-sm">Open</div>
+      </a>
+    </div>
+  </div>
+</div>
+
+<!-- Rename Modal -->
+<div *ngIf="renameModal" class="fixed inset-0 bg-black/30 flex items-center justify-center z-[60000]">
+  <div class="bg-white rounded shadow w-[520px] p-4">
+    <div class="text-lg font-semibold mb-2">Rename Sheet</div>
+    <label class="text-sm text-gray-600">Title</label>
+    <input class="w-full border rounded px-2 py-1 mt-1" [(ngModel)]="renameTitle" placeholder="Untitled" />
+    <div class="flex items-center justify-end gap-2 mt-3">
+      <button class="px-3 py-1 border rounded" (click)="cancelRename()">Cancel</button>
+      <button class="px-3 py-1 bg-blue-600 text-white rounded" (click)="confirmRename()">Save</button>
+    </div>
+  </div>
 </div>
