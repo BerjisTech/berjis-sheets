@@ -87,7 +87,7 @@
             [style.textAlign]="cellAlign(v.ri, ci)"
             [attr.type]="cellInputType(v.ri, ci)"
             [attr.inputmode]="cellInputType(v.ri, ci)==='number' ? 'decimal' : null"
-            (keydown)="onCellKeydown($event, v.ri, ci)" [attr.data-rc]="v.ri+'-'+ci" autocomplete="off" spellcheck="false" />
+            (keydown)="onCellKeydown($event, v.ri, ci)" (paste)="onCellPaste($event, v.ri, ci)" [attr.data-rc]="v.ri+'-'+ci" autocomplete="off" spellcheck="false" />
         </td>
       </tr>
 

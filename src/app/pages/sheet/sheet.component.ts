@@ -170,6 +170,14 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
   onCellKeydown(e: KeyboardEvent, ri: number, ci: number) {
     // Basic navigation: arrows, Enter, Tab
     const key = e.key;
+    // Clipboard shortcuts
+    if ((e.ctrlKey || (e as any).metaKey)) {
+      if (key.toLowerCase() === 'c') { e.preventDefault(); this.copySelection(); return; }
+      if (key.toLowerCase() === 'x') { e.preventDefault(); this.cutSelection(); return; }
+      // 'v' is handled via paste event so let it bubble
+    }
+    // Delete clears selected cells
+    if (key === 'Delete' || key === 'Backspace') { if (!this.isEditingInput(e)) { e.preventDefault(); this.clearSelectionValues(); return; } }
     if (key === 'Enter') { e.preventDefault(); this.moveFocus(ri + 1, ci); return; }
     if (key === 'Tab') { e.preventDefault(); if (e.shiftKey) this.moveFocus(ri, ci - 1); else this.moveFocus(ri, ci + 1); return; }
     const nav = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'];
@@ -193,6 +201,64 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
     // Row/column selection shortcuts
     if (key === ' ' && e.shiftKey) { e.preventDefault(); this.selectRow(ri); }
     if (key === ' ' && ((e as any).ctrlKey || (e as any).metaKey)) { e.preventDefault(); this.selectColumn(ci); }
+  }
+
+  private isEditingInput(e: KeyboardEvent): boolean {
+    const target = e.target as HTMLElement | null;
+    return !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA');
+  }
+
+  // Clipboard handling
+  private async copySelection(){
+    const text = this.serializeSelectionToText();
+    try { await navigator.clipboard.writeText(text); } catch { this.fallbackCopy(text); }
+  }
+  private async cutSelection(){ this.copySelection(); this.clearSelectionValues(); }
+  private serializeSelectionToText(): string {
+    if (this.rangeStart && this.rangeEnd){
+      const r1 = Math.min(this.rangeStart.r, this.rangeEnd.r);
+      const r2 = Math.max(this.rangeStart.r, this.rangeEnd.r);
+      const c1 = Math.min(this.rangeStart.c, this.rangeEnd.c);
+      const c2 = Math.max(this.rangeStart.c, this.rangeEnd.c);
+      const lines: string[] = [];
+      for (let r=r1; r<=r2; r++){
+        const row = [] as string[];
+        for (let c=c1; c<=c2; c++) row.push(this.grid[r]?.[c] ?? '');
+        lines.push(row.join('\t'));
+      }
+      return lines.join('\n');
+    }
+    if (this.multiSelected.size){
+      const cells = Array.from(this.multiSelected).map(k=>k.split('-').map(n=>parseInt(n,10)) as [number,number]).sort((a,b)=> a[0]===b[0]? a[1]-b[1] : a[0]-b[0]);
+      // Output as single column, one per line
+      return cells.map(([r,c]) => this.grid[r]?.[c] ?? '').join('\n');
+    }
+    if (this.activeCell){ return String(this.grid[this.activeCell.r]?.[this.activeCell.c] ?? ''); }
+    return '';
+  }
+  private fallbackCopy(text: string){ const ta = document.createElement('textarea'); ta.value = text; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); } catch {} document.body.removeChild(ta); }
+  onCellPaste(e: ClipboardEvent, ri: number, ci: number){
+    const data = e.clipboardData?.getData('text/plain'); if (!data) return;
+    e.preventDefault();
+    const rows = data.split(/\r?\n/).map(line => line.split('\t'));
+    // Multi-selection paste behavior
+    if (this.multiSelected.size && rows.length === 1 && rows[0].length === 1){
+      const val = rows[0][0];
+      for (const k of Array.from(this.multiSelected)) { const [r,c]=k.split('-').map(n=>parseInt(n,10)); if (!Number.isNaN(r)&&!Number.isNaN(c)) this.grid[r][c] = val; }
+      this.sheet!.data = this.packData(); this.queueSave(); return;
+    }
+    // Range or single-cell paste: fill starting at active cell or current ri,ci
+    const startR = this.activeCell ? this.activeCell.r : ri;
+    const startC = this.activeCell ? this.activeCell.c : ci;
+    const maxR = this.grid.length;
+    const maxC = this.grid[0]?.length || 0;
+    for (let r=0; r<rows.length; r++){
+      for (let c=0; c<rows[r].length; c++){
+        const tr = startR + r, tc = startC + c;
+        if (tr < maxR && tc < maxC) this.grid[tr][tc] = rows[r][c];
+      }
+    }
+    this.sheet!.data = this.packData(); this.queueSave();
   }
 
   // Viewport virtualization
@@ -309,6 +375,18 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
   isCellMulti(ri: number, ci: number): boolean { return this.multiSelected.has(`${ri}-${ci}`); }
   isCellSelected(ri: number, ci: number): boolean { return this.isCellActive(ri, ci) || this.isCellInRange(ri, ci) || this.isCellMulti(ri, ci); }
   private initMeta(){ const rows = this.grid.length, cols = this.grid[0]?.length || 0; this.meta = Array.from({ length: rows }, () => Array.from({ length: cols }, () => null)); }
+  private clearSelectionValues(){
+    if (this.rangeStart && this.rangeEnd){
+      const r1 = Math.min(this.rangeStart.r, this.rangeEnd.r);
+      const r2 = Math.max(this.rangeStart.r, this.rangeEnd.r);
+      const c1 = Math.min(this.rangeStart.c, this.rangeEnd.c);
+      const c2 = Math.max(this.rangeStart.c, this.rangeEnd.c);
+      for (let r=r1; r<=r2; r++) for (let c=c1; c<=c2; c++) this.grid[r][c] = '';
+    } else if (this.multiSelected.size){
+      for (const k of this.multiSelected){ const [r,c] = k.split('-').map(n=>parseInt(n,10)); if (!Number.isNaN(r)&&!Number.isNaN(c)) this.grid[r][c]=''; }
+    } else if (this.activeCell){ this.grid[this.activeCell.r][this.activeCell.c] = ''; }
+    this.sheet!.data = this.packData(); this.queueSave();
+  }
   private getSelectedRowBounds(): [number, number] | null {
     // Determine selection from range, multi, or active cell
     let rows: number[] = [];
@@ -531,12 +609,32 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
       items.push({ label: 'Insert row below', key: 'insertRowBelow' });
       items.push({ label: 'Delete row(s)', key: 'deleteRows' });
       items.push({ label: 'Duplicate row', key: 'dupRow' });
+      if (t === 'row'){
+        items.push({ divider: true });
+        items.push({ label: 'Row: Format as text', key: 'rowFmtText' });
+        items.push({ label: 'Row: Format as number', key: 'rowFmtNumber' });
+        items.push({ label: 'Row: Format as date', key: 'rowFmtDate' });
+        items.push({ divider: true });
+        items.push({ label: 'Row: Align left', key: 'rowAlignLeft' });
+        items.push({ label: 'Row: Align center', key: 'rowAlignCenter' });
+        items.push({ label: 'Row: Align right', key: 'rowAlignRight' });
+      }
     }
     if (t === 'cell' || t === 'col'){
       items.push({ label: 'Insert column left', key: 'insertColLeft' });
       items.push({ label: 'Insert column right', key: 'insertColRight' });
       items.push({ label: 'Delete column(s)', key: 'deleteCols' });
       items.push({ label: 'Duplicate column', key: 'dupCol' });
+      if (t === 'col'){
+        items.push({ divider: true });
+        items.push({ label: 'Column: Format as text', key: 'colFmtText' });
+        items.push({ label: 'Column: Format as number', key: 'colFmtNumber' });
+        items.push({ label: 'Column: Format as date', key: 'colFmtDate' });
+        items.push({ divider: true });
+        items.push({ label: 'Column: Align left', key: 'colAlignLeft' });
+        items.push({ label: 'Column: Align center', key: 'colAlignCenter' });
+        items.push({ label: 'Column: Align right', key: 'colAlignRight' });
+      }
     }
     if (t === 'cell'){
       items.push({ divider: true });
@@ -570,6 +668,18 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
       case 'insertColRight': this.insertColAt(colIndexFor('right')); break;
       case 'deleteRows': this.deleteSelectedRows(); break;
       case 'deleteCols': this.deleteSelectedCols(); break;
+      case 'rowFmtText': if (t.r!=null) this.applyFormatToRow(t.r,'text'); break;
+      case 'rowFmtNumber': if (t.r!=null) this.applyFormatToRow(t.r,'number'); break;
+      case 'rowFmtDate': if (t.r!=null) this.applyFormatToRow(t.r,'date'); break;
+      case 'rowAlignLeft': if (t.r!=null) this.applyAlignToRow(t.r,'left'); break;
+      case 'rowAlignCenter': if (t.r!=null) this.applyAlignToRow(t.r,'center'); break;
+      case 'rowAlignRight': if (t.r!=null) this.applyAlignToRow(t.r,'right'); break;
+      case 'colFmtText': if (t.c!=null) this.applyFormatToCol(t.c,'text'); break;
+      case 'colFmtNumber': if (t.c!=null) this.applyFormatToCol(t.c,'number'); break;
+      case 'colFmtDate': if (t.c!=null) this.applyFormatToCol(t.c,'date'); break;
+      case 'colAlignLeft': if (t.c!=null) this.applyAlignToCol(t.c,'left'); break;
+      case 'colAlignCenter': if (t.c!=null) this.applyAlignToCol(t.c,'center'); break;
+      case 'colAlignRight': if (t.c!=null) this.applyAlignToCol(t.c,'right'); break;
       case 'dupRow': {
         const target = (t.r != null) ? t.r : (this.getSelectedRowBounds()?.[0] ?? 0);
         const src = this.grid[target]; if (!src) break;
@@ -626,6 +736,10 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
     }
     if (this.activeCell){ fn(this.activeCell.r, this.activeCell.c); }
   }
+  private applyAlignToRow(ri: number, align: 'left'|'center'|'right'){ for (let c=0; c<(this.grid[ri]?.length||0); c++){ const m=(this.meta[ri] ||= []); m[c] = { ...(m[c]||{}), align }; } this.sheet!.data=this.packData(); this.queueSave(); }
+  private applyAlignToCol(ci: number, align: 'left'|'center'|'right'){ for (let r=0; r<this.grid.length; r++){ const m=(this.meta[r] ||= []); m[ci] = { ...(m[ci]||{}), align }; } this.sheet!.data=this.packData(); this.queueSave(); }
+  private applyFormatToRow(ri: number, format: 'text'|'number'|'date'){ for (let c=0; c<(this.grid[ri]?.length||0); c++){ const m=(this.meta[ri] ||= []); m[c] = { ...(m[c]||{}), format }; } this.sheet!.data=this.packData(); this.queueSave(); }
+  private applyFormatToCol(ci: number, format: 'text'|'number'|'date'){ for (let r=0; r<this.grid.length; r++){ const m=(this.meta[r] ||= []); m[ci] = { ...(m[ci]||{}), format }; } this.sheet!.data=this.packData(); this.queueSave(); }
   private deleteSelectedRows(){
     const b = this.getSelectedRowBounds(); if (!b) return;
     const [start,end] = b; const count = end-start+1;
