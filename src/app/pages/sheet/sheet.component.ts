@@ -13,6 +13,7 @@ import { SheetsService, SheetDoc, defaultGrid } from '../../sheets.service';
 export class SheetPageComponent implements OnInit, AfterViewInit {
   sheet: SheetDoc | null = null;
   grid: string[][] = defaultGrid();
+  meta: ({ align?: 'left'|'center'|'right', format?: 'text'|'number'|'date' } | null)[][] = [];
   pendingSave?: any;
   openModal = false;
   openId = '';
@@ -118,14 +119,18 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
     if (Array.isArray(data)) {
       this.grid = data as string[][];
       this.initSizing();
+      this.initMeta();
     } else if (data && Array.isArray(data.grid)) {
       this.grid = data.grid as string[][];
       this.colWidths = Array.isArray(data.colWidths) && data.colWidths.length ? data.colWidths.slice() : Array.from({ length: this.grid[0]?.length || 0 }, () => this.defaultColWidth);
       this.rowHeights = Array.isArray(data.rowHeights) && data.rowHeights.length ? data.rowHeights.slice() : Array.from({ length: this.grid.length }, () => this.defaultRowHeight);
       this.recomputeRowOffsets();
+      this.meta = Array.isArray((data as any).meta) ? (data as any).meta : [];
+      if (!this.meta.length) this.initMeta();
     } else {
       this.grid = defaultGrid();
       this.initSizing();
+      this.initMeta();
     }
     this.updateViewport();
   }
@@ -143,8 +148,8 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
   onTitleChange() { this.queueSave(); }
   onCellChange(r: number, c: number, val: string) { if (!this.sheet) return; this.grid[r][c] = val; this.sheet.data = this.packData(); this.queueSave(); }
 
-  addRow() { this.grid.push(Array.from({ length: this.grid[0]?.length || 10 }, () => '')); this.rowHeights.push(this.defaultRowHeight); this.recomputeRowOffsets(); this.sheet!.data = this.packData(); this.queueSave(); }
-  addCol() { for (const row of this.grid) row.push(''); this.colWidths.push(this.defaultColWidth); this.sheet!.data = this.packData(); this.queueSave(); }
+  addRow() { this.grid.push(Array.from({ length: this.grid[0]?.length || 10 }, () => '')); this.meta.push(Array.from({ length: this.grid[0]?.length || 10 }, () => null)); this.rowHeights.push(this.defaultRowHeight); this.recomputeRowOffsets(); this.sheet!.data = this.packData(); this.queueSave(); }
+  addCol() { for (let r=0; r<this.grid.length; r++){ this.grid[r].push(''); (this.meta[r] ||= []).push(null); } this.colWidths.push(this.defaultColWidth); this.sheet!.data = this.packData(); this.queueSave(); }
 
   private queueSave() { if (!this.sheet) return; if (this.pendingSave) clearTimeout(this.pendingSave); this.pendingSave = setTimeout(() => this.save(), 400); }
   private async ensureCreatedId() { if (this.sheet && this.sheet.id === 'new') { const hasTitle = !!this.sheet.title && this.sheet.title.trim().length > 0; const hasData = JSON.stringify(this.grid).length > 2; if (hasTitle || hasData) { const created = await this.sheets.create({ title: this.sheet.title, data: this.packData() }); this.sheet = created; this.router.navigate(['/sheet', created.id], { replaceUrl: true }); } } }
@@ -185,6 +190,9 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
       }
       this.moveFocus(r, c);
     }
+    // Row/column selection shortcuts
+    if (key === ' ' && e.shiftKey) { e.preventDefault(); this.selectRow(ri); }
+    if (key === ' ' && ((e as any).ctrlKey || (e as any).metaKey)) { e.preventDefault(); this.selectColumn(ci); }
   }
 
   // Viewport virtualization
@@ -300,6 +308,7 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
   }
   isCellMulti(ri: number, ci: number): boolean { return this.multiSelected.has(`${ri}-${ci}`); }
   isCellSelected(ri: number, ci: number): boolean { return this.isCellActive(ri, ci) || this.isCellInRange(ri, ci) || this.isCellMulti(ri, ci); }
+  private initMeta(){ const rows = this.grid.length, cols = this.grid[0]?.length || 0; this.meta = Array.from({ length: rows }, () => Array.from({ length: cols }, () => null)); }
   private getSelectedRowBounds(): [number, number] | null {
     // Determine selection from range, multi, or active cell
     let rows: number[] = [];
@@ -345,6 +354,7 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
     const cols = this.grid[0]?.length || 0;
     index = Math.max(0, Math.min(this.grid.length, index));
     this.grid.splice(index, 0, Array.from({ length: cols }, () => ''));
+    this.meta.splice(index, 0, Array.from({ length: cols }, () => null));
     this.rowHeights.splice(index, 0, this.defaultRowHeight);
     this.recomputeRowOffsets();
     this.sheet!.data = this.packData();
@@ -354,7 +364,7 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
     const rows = this.grid.length;
     const maxC = this.grid[0]?.length || 0;
     index = Math.max(0, Math.min(maxC, index));
-    for (let r = 0; r < rows; r++) this.grid[r].splice(index, 0, '');
+    for (let r = 0; r < rows; r++) { this.grid[r].splice(index, 0, ''); (this.meta[r] ||= []).splice(index, 0, null); }
     this.colWidths.splice(index, 0, this.defaultColWidth);
     this.sheet!.data = this.packData();
     this.queueSave();
@@ -447,7 +457,7 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
 
   // Persist sizes with data when saving
   private packData(){
-    return { grid: this.grid, colWidths: this.colWidths, rowHeights: this.rowHeights };
+    return { grid: this.grid, colWidths: this.colWidths, rowHeights: this.rowHeights, meta: this.meta };
   }
 
   // Measure helpers
@@ -484,6 +494,10 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
     return Math.ceil(lines * lineH + paddingY);
   }
 
+  // Formatting helpers for template
+  cellAlign(r: number, c: number): 'left'|'center'|'right' { return (this.meta[r]?.[c]?.align as any) || 'left'; }
+  cellInputType(r: number, c: number): 'text'|'number'|'date' { return (this.meta[r]?.[c]?.format as any) || 'text'; }
+
   // Context menu
   contextOpen = false;
   contextX = 0; contextY = 0;
@@ -515,26 +529,21 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
     if (t === 'cell' || t === 'row'){
       items.push({ label: 'Insert row above', key: 'insertRowAbove' });
       items.push({ label: 'Insert row below', key: 'insertRowBelow' });
+      items.push({ label: 'Delete row(s)', key: 'deleteRows' });
       items.push({ label: 'Duplicate row', key: 'dupRow' });
     }
     if (t === 'cell' || t === 'col'){
       items.push({ label: 'Insert column left', key: 'insertColLeft' });
       items.push({ label: 'Insert column right', key: 'insertColRight' });
+      items.push({ label: 'Delete column(s)', key: 'deleteCols' });
       items.push({ label: 'Duplicate column', key: 'dupCol' });
     }
     if (t === 'cell'){
       items.push({ divider: true });
-      const r = this.contextTarget.r!, c = this.contextTarget.c!;
-      const val = (this.grid[r]?.[c] ?? '').toString();
-      const isDate = /^\d{4}-\d{2}-\d{2}$/.test(val) || /\d{1,2}\/\d{1,2}\/\d{2,4}/.test(val);
-      const isNumber = /^-?\d+(?:\.\d+)?$/.test(val);
-      if (isDate) {
-        items.push({ label: 'Format date…', key: 'fmtDate' });
-      } else if (isNumber) {
-        items.push({ label: 'Format number…', key: 'fmtNumber' });
-      } else {
-        items.push({ label: 'Text format…', key: 'fmtText' });
-      }
+      items.push({ label: 'Format as text', key: 'fmtText' });
+      items.push({ label: 'Format as number', key: 'fmtNumber' });
+      items.push({ label: 'Format as date', key: 'fmtDate' });
+      items.push({ divider: true });
       items.push({ label: 'Align left', key: 'alignLeft' });
       items.push({ label: 'Align center', key: 'alignCenter' });
       items.push({ label: 'Align right', key: 'alignRight' });
@@ -559,10 +568,15 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
       case 'insertRowBelow': this.insertRowAt(rowIndexFor('below')); break;
       case 'insertColLeft': this.insertColAt(colIndexFor('left')); break;
       case 'insertColRight': this.insertColAt(colIndexFor('right')); break;
+      case 'deleteRows': this.deleteSelectedRows(); break;
+      case 'deleteCols': this.deleteSelectedCols(); break;
       case 'dupRow': {
         const target = (t.r != null) ? t.r : (this.getSelectedRowBounds()?.[0] ?? 0);
         const src = this.grid[target]; if (!src) break;
         const copy = src.slice(); this.grid.splice(target+1, 0, copy);
+        // Duplicate meta row
+        const msrc = this.meta[target] || Array.from({ length: this.grid[0]?.length||0 }, () => null);
+        this.meta.splice(target+1, 0, msrc.map(x => x ? { ...x } : null));
         this.rowHeights.splice(target+1, 0, this.rowHeights[target]||this.defaultRowHeight);
         this.recomputeRowOffsets(); this.sheet!.data = this.packData(); this.queueSave();
         break;
@@ -572,17 +586,66 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
         for (let r=0; r<this.grid.length; r++){
           const val = this.grid[r]?.[target] ?? '';
           this.grid[r].splice(target+1, 0, val);
+          const m = (this.meta[r] ||= []); const mv = m[target] || null; m.splice(target+1, 0, mv ? { ...mv } : null);
         }
         this.colWidths.splice(target+1, 0, this.colWidths[target]||this.defaultColWidth);
         this.sheet!.data = this.packData(); this.queueSave();
         break;
       }
-      // Placeholder formatting actions
-      case 'fmtDate': case 'fmtNumber': case 'fmtText': case 'alignLeft': case 'alignCenter': case 'alignRight':
-        // Not implemented yet; keep menu interactive
-        break;
+      case 'fmtDate': this.applyFormatToSelection('date'); break;
+      case 'fmtNumber': this.applyFormatToSelection('number'); break;
+      case 'fmtText': this.applyFormatToSelection('text'); break;
+      case 'alignLeft': this.applyAlignToSelection('left'); break;
+      case 'alignCenter': this.applyAlignToSelection('center'); break;
+      case 'alignRight': this.applyAlignToSelection('right'); break;
       default: break;
     }
     this.closeContext();
+  }
+
+  private applyAlignToSelection(align: 'left'|'center'|'right'){
+    this.forEachSelectedCell((r,c) => { const m = (this.meta[r] ||= []); m[c] = { ...(m[c]||{}), align }; });
+    this.sheet!.data = this.packData(); this.queueSave();
+  }
+  private applyFormatToSelection(format: 'text'|'number'|'date'){
+    this.forEachSelectedCell((r,c) => { const m = (this.meta[r] ||= []); m[c] = { ...(m[c]||{}), format }; });
+    this.sheet!.data = this.packData(); this.queueSave();
+  }
+  private forEachSelectedCell(fn: (r:number,c:number)=>void){
+    if (this.rangeStart && this.rangeEnd){
+      const r1 = Math.min(this.rangeStart.r, this.rangeEnd.r);
+      const r2 = Math.max(this.rangeStart.r, this.rangeEnd.r);
+      const c1 = Math.min(this.rangeStart.c, this.rangeEnd.c);
+      const c2 = Math.max(this.rangeStart.c, this.rangeEnd.c);
+      for (let r=r1; r<=r2; r++) for (let c=c1; c<=c2; c++) fn(r,c);
+      return;
+    }
+    if (this.multiSelected.size){
+      for (const k of this.multiSelected){ const [rs, cs] = k.split('-').map(n=>parseInt(n,10)); if (!Number.isNaN(rs)&&!Number.isNaN(cs)) fn(rs,cs); }
+      return;
+    }
+    if (this.activeCell){ fn(this.activeCell.r, this.activeCell.c); }
+  }
+  private deleteSelectedRows(){
+    const b = this.getSelectedRowBounds(); if (!b) return;
+    const [start,end] = b; const count = end-start+1;
+    if (count<=0) return;
+    this.grid.splice(start, count);
+    this.rowHeights.splice(start, count);
+    this.meta.splice(start, count);
+    if (!this.grid.length){ this.grid = defaultGrid(); this.initSizing(); this.initMeta(); }
+    this.recomputeRowOffsets(); this.sheet!.data = this.packData(); this.queueSave();
+  }
+  private deleteSelectedCols(){
+    const b = this.getSelectedColBounds(); if (!b) return;
+    const [start,end] = b; const count = end-start+1;
+    if (count<=0) return;
+    for (let r=0; r<this.grid.length; r++){
+      this.grid[r].splice(start, count);
+      (this.meta[r] ||= []).splice(start, count);
+    }
+    this.colWidths.splice(start, count);
+    if (!(this.grid[0]?.length)){ this.grid = defaultGrid(); this.initSizing(); this.initMeta(); }
+    this.sheet!.data = this.packData(); this.queueSave();
   }
 }
