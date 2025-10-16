@@ -390,20 +390,20 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
       c2 = Math.max(this.rangeStart.c, this.rangeEnd.c);
     } else if (this.activeCell){ r1 = r2 = this.activeCell.r; c1 = c2 = this.activeCell.c; }
     else return null;
-    // Bounds checks
-    r1 = Math.max(0, Math.min(this.grid.length-1, r1));
-    r2 = Math.max(0, Math.min(this.grid.length-1, r2));
-    const maxC = Math.max(0, (this.grid[0]?.length||1)-1);
-    c1 = Math.max(0, Math.min(maxC, c1));
-    c2 = Math.max(0, Math.min(maxC, c2));
-    // Positioning relative to table
-    const left = 40 + this.sumWidths(0, c1-1);
-    const width = this.sumWidths(c1, c2);
-    const top = (this.headerHeight || 28) + (this.rowOffsets[r1] || 0);
-    const height = (this.rowOffsets[r2+1] || this.rowOffsets[r2] + (this.rowHeights[r2]||this.defaultRowHeight)) - (this.rowOffsets[r1] || 0);
-    return { x: left, y: top, w: width, h: height };
+    // Resolve DOM elements for first and last cell in range
+    const pane = this.editorMainPane?.nativeElement; if (!pane) return null;
+    const a = document.querySelector<HTMLInputElement>(`input[data-rc="${r1}-${c1}"]`);
+    const b = document.querySelector<HTMLInputElement>(`input[data-rc="${r2}-${c2}"]`);
+    if (!a || !b) return null;
+    const ar = a.getBoundingClientRect();
+    const br = b.getBoundingClientRect();
+    const pr = pane.getBoundingClientRect();
+    const x = (ar.left - pr.left) + pane.scrollLeft - 1; // adjust for border
+    const y = (ar.top - pr.top) + pane.scrollTop - 1;
+    const w = (br.right - ar.left) + 2;
+    const h = (br.bottom - ar.top) + 2;
+    return { x, y, w, h };
   }
-  private sumWidths(start: number, end: number): number { if (end < start) return 0; let sum = 0; for (let i=start; i<=end; i++) sum += this.colWidths[i] || this.defaultColWidth; return sum; }
   private clearSelectionValues(){
     if (this.rangeStart && this.rangeEnd){
       const r1 = Math.min(this.rangeStart.r, this.rangeEnd.r);

@@ -46,15 +46,15 @@
 
 </div>
 
-<div #editorMainPane class="h-[calc(100vh-155px)] mt-2 z-[1] overflow-auto bg-white" (mouseup)="endResizing()" (contextmenu)="$event.preventDefault()">
+<div #editorMainPane class="h-[calc(100vh-155px)] mt-2 z-[1] overflow-auto bg-white relative" (mouseup)="endResizing()" (contextmenu)="$event.preventDefault()">
   <table class="text-sm table-fixed border-collapse relative" [style.width.px]="totalTableWidth">
     <colgroup>
       <col [style.width.px]="40" />
       <col *ngFor="let _ of (grid && grid[0] ? grid[0] : []); let ci = index" [style.width.px]="colWidths[ci]" />
     </colgroup>
-    <thead>
+    <thead class="sticky top-0 z-20">
       <tr #headerRow>
-        <th class="border py-1 bg-gray-50 w-[10px]"></th>
+        <th class="border py-1 bg-gray-50 w-[10px] sticky left-0 z-30"></th>
         <th class="border px-2 py-1 bg-gray-50 relative select-none" *ngFor="let _ of (grid && grid[0] ? grid[0] : []); let ci = index" [style.width.px]="colWidths[ci]" (click)="selectColumn(ci)" (contextmenu)="openContext($event, 'col', undefined, ci)">
           {{ colLabel(ci) }}
           <div class="absolute -right-1 top-0 h-full w-2 cursor-col-resize z-10" (mousedown)="startColResize(ci, $event)" (dblclick)="autoSizeCol(ci)"></div>
@@ -66,7 +66,7 @@
       <tr *ngIf="topSpacer > 0"><td class="p-0" [attr.colspan]="(grid[0]?.length||0)+1" [style.height.px]="topSpacer"></td></tr>
 
       <tr *ngFor="let v of visibleRows; let i = index; trackBy: trackVisibleRow">
-        <th class="border px-2 py-1 bg-gray-50 text-right w-[10px] relative select-none" [style.height.px]="rowHeights[v.ri]" (click)="selectRow(v.ri)" (contextmenu)="openContext($event, 'row', v.ri, undefined)">
+        <th class="border px-2 py-1 bg-gray-50 text-right w-[10px] relative select-none sticky left-0 z-10" [style.height.px]="rowHeights[v.ri]" (click)="selectRow(v.ri)" (contextmenu)="openContext($event, 'row', v.ri, undefined)">
           {{ v.ri+1 }}
           <div class="absolute left-0 bottom-0 h-1 w-full cursor-row-resize" (mousedown)="startRowResize(v.ri, $event)" (dblclick)="autoSizeRow(v.ri)"></div>
         </th>
@@ -97,6 +97,8 @@
     <!-- Selection dashed outline overlay -->
     <div *ngIf="selectionRect" class="absolute pointer-events-none border-2 border-dashed border-blue-500" [style.left.px]="selectionRect.x" [style.top.px]="selectionRect.y" [style.width.px]="selectionRect.w" [style.height.px]="selectionRect.h"></div>
   </table>
+  <!-- Selection dashed outline overlay positioned relative to the scroll pane -->
+  <div *ngIf="selectionRect" class="absolute pointer-events-none border-2 border-dashed border-blue-500 z-5" [style.left.px]="selectionRect.x" [style.top.px]="selectionRect.y" [style.width.px]="selectionRect.w" [style.height.px]="selectionRect.h"></div>
 </div>
 
 <!-- Context Menu -->
