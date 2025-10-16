@@ -137,7 +137,15 @@
           [class.bg-white]="i===activeTabIndex" [class.shadow]="i===activeTabIndex" [class.border]="i===activeTabIndex"
           (click)="setActiveSheet(i)" (dblclick)="renameSheet(i)" (contextmenu)="openContext($event,'tab', undefined, undefined, i)">
     <span class="inline-block w-2 h-2 rounded-full mr-2 border" [style.backgroundColor]="s.color||'#ffffff'" [style.borderColor]="s.color||'#d1d5db'"></span>
-    <span class="truncate max-w-[160px]">{{ s.name }}</span>
+    <ng-container *ngIf="renamingTabIndex!==i; else renamingTpl">
+      <span class="truncate max-w-[160px]">{{ s.name }}</span>
+    </ng-container>
+    <ng-template #renamingTpl>
+      <input class="px-1 py-0.5 border rounded outline-none w-[160px]" [ngModel]="renamingTabName" [ngModelOptions]="{standalone:true}"
+             (ngModelChange)="renamingTabName=$event" (blur)="commitRenameSheet()"
+             (click)="$event.stopPropagation()" (keydown.enter)="commitRenameSheet()" (keydown.escape)="cancelRenameSheet()"
+             [attr.data-tab-input]="i" />
+    </ng-template>
     <span *ngIf="tabs.length>1" class="text-gray-400 hover:text-red-600" (click)="$event.stopPropagation(); deleteSheet(i)">✕</span>
   </button>
   <button class="ml-1 px-2 py-1 border rounded bg-white" (click)="addSheet()">+ Add sheet</button>

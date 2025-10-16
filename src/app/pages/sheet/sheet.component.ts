@@ -596,7 +596,13 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
   setActiveSheet(i: number){ if (i<0 || i>=this.tabs.length) return; this.activeTabIndex = i; this.applyActiveSheet(); this.updateViewport(); this.queueSave(); }
   private applyActiveSheet(){ const s = this.tabs[this.activeTabIndex]; this.grid = s.grid; this.colWidths = s.colWidths; this.rowHeights = s.rowHeights; this.meta = s.meta; this.recomputeRowOffsets(); }
   addSheet(){ const n = this.tabs.length+1; const s = this.makeSheet(`Sheet${n}`, defaultGrid(1000,26)); this.tabs.push(s); this.setActiveSheet(this.tabs.length-1); }
-  renameSheet(i: number){ const cur = this.tabs[i]?.name || `Sheet${i+1}`; const name = prompt('Rename sheet', cur); if (name!=null) { this.tabs[i].name = name.trim() || cur; this.queueSave(); } }
+  // Inline tab rename
+  renamingTabIndex: number | null = null;
+  renamingTabName = '';
+  startRenameSheet(i: number){ this.renamingTabIndex = i; this.renamingTabName = this.tabs[i]?.name || `Sheet${i+1}`; setTimeout(()=>{ const el=document.querySelector<HTMLInputElement>(`input[data-tab-input="${i}"]`); el?.focus(); el?.select(); },0); }
+  renameSheet(i: number){ this.startRenameSheet(i); }
+  commitRenameSheet(){ if (this.renamingTabIndex==null) return; const i=this.renamingTabIndex; const cur=this.tabs[i]?.name||`Sheet${i+1}`; const next=(this.renamingTabName||'').trim(); this.tabs[i].name = next || cur; this.renamingTabIndex=null; this.renamingTabName=''; this.queueSave(); }
+  cancelRenameSheet(){ this.renamingTabIndex=null; this.renamingTabName=''; }
   deleteSheet(i: number){ if (this.tabs.length<=1) return; this.tabs.splice(i,1); if (this.activeTabIndex>=this.tabs.length) this.activeTabIndex=this.tabs.length-1; this.applyActiveSheet(); this.queueSave(); }
   duplicateSheet(i: number){ const s = this.tabs[i]; const copy: SheetData = { name: s.name + ' (Copy)', color: s.color, grid: s.grid.map(row=>row.slice()), colWidths: s.colWidths.slice(), rowHeights: s.rowHeights.slice(), meta: s.meta.map(r=>r.map(c=> c ? { ...c } : null)) }; this.tabs.splice(i+1, 0, copy); this.setActiveSheet(i+1); }
 
