@@ -142,7 +142,8 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
     setTimeout(() => {
       this.editorMainPane?.nativeElement?.addEventListener('scroll', () => this.updateViewport());
       window.addEventListener('mouseup', () => this.onGlobalMouseUp());
-      window.addEventListener('mousemove', (e) => this.onGlobalMouseMove(e));
+      window.addEventListener('mousemove', (e) => { this.onGlobalMouseMove(e); if (this.draggingFill) { this.updateFillPreview(e); } });
+      window.addEventListener('mouseup', (e) => { if (this.draggingFill) this.applyFill(e); });
       this.headerHeight = this.headerRow?.nativeElement?.offsetHeight || this.headerHeight;
       window.addEventListener('resize', () => { this.headerHeight = this.headerRow?.nativeElement?.offsetHeight || this.headerHeight; });
       this.updateViewport();
@@ -151,6 +152,7 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
 
   onTitleChange() { this.queueSave(); }
   onCellChange(r: number, c: number, val: string) { if (!this.sheet) return; this.grid[r][c] = val; this.sheet.data = this.packData(); this.queueSave(); }
+  onCellInput(e: Event, r: number, c: number){ if (this.showFormatted) return; const val = (e.target as HTMLInputElement).value; this.onCellChange(r,c,val); }
 
   addRow() { this.grid.push(Array.from({ length: this.grid[0]?.length || 10 }, () => '')); this.meta.push(Array.from({ length: this.grid[0]?.length || 10 }, () => null)); this.rowHeights.push(this.defaultRowHeight); this.recomputeRowOffsets(); this.sheet!.data = this.packData(); this.queueSave(); }
   addCol() { for (let r=0; r<this.grid.length; r++){ this.grid[r].push(''); (this.meta[r] ||= []).push(null); } this.colWidths.push(this.defaultColWidth); this.sheet!.data = this.packData(); this.queueSave(); }
@@ -279,6 +281,7 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
   bottomSpacer = 0;
   get totalTableWidth(): number { try { return 40 + (this.colWidths?.reduce((a,b)=>a+(b||this.defaultColWidth),0)||0); } catch { return 40 + (this.grid[0]?.length||0)*this.defaultColWidth; } }
   headerHeight = 28;
+  showFormatted = false;
 
   private initSizing() {
     const rows = this.grid.length;
@@ -298,6 +301,12 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
     let sum = 0;
     for (let i = 0; i < total; i++) { sum += this.rowHeights[i]; if (sum > offset) return i; }
     return Math.max(0, total - 1);
+  }
+  private findColAtOffset(offsetX: number): number {
+    // offsetX is from left of first data column (after row header)
+    let x = 0; const cols = this.colWidths.length;
+    for (let i=0; i<cols; i++){ const w = this.colWidths[i] || this.defaultColWidth; if (x + w > offsetX) return i; x += w; }
+    return Math.max(0, cols - 1);
   }
   updateViewport() {
     const el = this.editorMainPane?.nativeElement; if (!el) return;
@@ -604,12 +613,86 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
   // Formatting helpers for template
   cellAlign(r: number, c: number): 'left'|'center'|'right' { return (this.meta[r]?.[c]?.align as any) || 'left'; }
   cellInputType(r: number, c: number): 'text'|'number'|'date' { return (this.meta[r]?.[c]?.format as any) || 'text'; }
+  formatDisplay(r: number, c: number, raw: any): string {
+    const meta = this.meta[r]?.[c] || {} as any;
+    const val = String(raw ?? '');
+    if (!val) return '';
+    if (meta.format === 'number'){
+      const num = Number(val.replace(/,/g,'')); if (Number.isNaN(num)) return val;
+      switch(meta.numberPreset){
+        case 'num0': return Math.round(num).toLocaleString();
+        case 'currencyUSD': return num.toLocaleString(undefined, { style: 'currency', currency: 'USD' });
+        case 'percent': return (num*100).toLocaleString(undefined, { maximumFractionDigits: 2 }) + '%';
+        case 'num2': default: return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      }
+    }
+    if (meta.format === 'date'){
+      const d = new Date(val); if (isNaN(d.getTime())) return val;
+      const yyyy = d.getFullYear(); const mm = String(d.getMonth()+1).padStart(2,'0'); const dd = String(d.getDate()).padStart(2,'0');
+      if (meta.datePreset === 'dateMDY') return `${mm}/${dd}/${yyyy}`;
+      return `${yyyy}-${mm}-${dd}`;
+    }
+    return val;
+  }
+
+  // Fill handle state
+  draggingFill = false;
+  fillPreviewRect: { x:number,y:number,w:number,h:number } | null = null;
+  private fillFrom: { r1:number,c1:number,r2:number,c2:number } | null = null;
+  startFillDrag(e: MouseEvent){ e.preventDefault(); e.stopPropagation(); if (!this.selectionRect || !(this.rangeStart||this.activeCell)) return; const rs = this.rangeStart || this.activeCell!; const re = this.rangeEnd || this.activeCell!; this.fillFrom = { r1: Math.min(rs.r, re.r), c1: Math.min(rs.c, re.c), r2: Math.max(rs.r, re.r), c2: Math.max(rs.c, re.c) }; this.draggingFill = true; }
+  private updateFillPreview(e: MouseEvent){ if (!this.draggingFill || !this.fillFrom) return; const pane = this.editorMainPane?.nativeElement; if (!pane) return; const pr = pane.getBoundingClientRect(); const relX = pane.scrollLeft + (e.clientX - pr.left) - 40; const relY = pane.scrollTop + (e.clientY - pr.top) - (this.headerHeight||28); const tr = this.findRowAtOffset(Math.max(0, relY)); const tc = this.findColAtOffset(Math.max(0, relX)); const r1 = Math.min(this.fillFrom.r1, tr); const r2 = Math.max(this.fillFrom.r2, tr); const c1 = Math.min(this.fillFrom.c1, tc); const c2 = Math.max(this.fillFrom.c2, tc); const a = document.querySelector<HTMLInputElement>(`input[data-rc="${r1}-${c1}"]`); const b=document.querySelector<HTMLInputElement>(`input[data-rc=\"${r2}-${c2}\"]`); const paneRect = pr; if (a && b){ const ar=a.getBoundingClientRect(); const br=b.getBoundingClientRect(); this.fillPreviewRect={ x:(ar.left-paneRect.left)+pane.scrollLeft-1, y:(ar.top-paneRect.top)+pane.scrollTop-1, w:(br.right-ar.left)+2, h:(br.bottom-ar.top)+2 }; } }
+  private applyFill(e: MouseEvent){ if (!this.fillFrom) return; const pane=this.editorMainPane?.nativeElement; if (!pane) return; const pr=pane.getBoundingClientRect(); const relX = pane.scrollLeft + (e.clientX - pr.left) - 40; const relY = pane.scrollTop + (e.clientY - pr.top) - (this.headerHeight||28); const tr = this.findRowAtOffset(Math.max(0, relY)); const tc = this.findColAtOffset(Math.max(0, relX)); const src = this.fillFrom; const dr1 = Math.min(src.r1, tr), dr2 = Math.max(src.r2, tr), dc1 = Math.min(src.c1, tc), dc2 = Math.max(src.c2, tc); this.performFill(src, { r1:dr1,c1:dc1,r2:dr2,c2:dc2 }); this.draggingFill=false; this.fillFrom=null; this.fillPreviewRect=null; this.queueSave(); }
+  private performFill(src: {r1:number,c1:number,r2:number,c2:number}, dst: {r1:number,c1:number,r2:number,c2:number}){
+    // Determine expanded area outside src to fill
+    const top = Math.min(dst.r1, src.r1), left = Math.min(dst.c1, src.c1), bottom = Math.max(dst.r2, src.r2), right = Math.max(dst.c2, src.c2);
+    const fillTop = top < src.r1 ? top : src.r2+1;
+    const fillBottom = bottom > src.r2 ? bottom : src.r1-1;
+    const fillLeft = left < src.c1 ? left : src.c2+1;
+    const fillRight = right > src.c2 ? right : src.c1-1;
+    const sh = src.r2 - src.r1 + 1, sw = src.c2 - src.c1 + 1;
+    const isSingle = sh===1 && sw===1;
+    const srcVal = this.grid[src.r1][src.c1];
+    const incType = isSingle ? this.detectIncrementType(srcVal) : 'none';
+    for (let r=top; r<=bottom; r++){
+      for (let c=left; c<=right; c++){
+        const inSrc = r>=src.r1 && r<=src.r2 && c>=src.c1 && c<=src.c2;
+        if (inSrc) continue; // skip original
+        const inFill = (r>=fillTop && r<=fillBottom && c>=src.c1 && c<=src.c2) || (c>=fillLeft && c<=fillRight && r>=src.r1 && r<=src.r2);
+        if (!inFill) continue;
+        if (incType!=='none') {
+          // Increment along the axis of expansion
+          const dr = r - src.r1; const dc = c - src.c1;
+          const step = (r>src.r2 || c>src.c2) ? 1 : -1;
+          this.grid[r][c] = this.incrementValue(srcVal, (dr+dc)*step, incType);
+        } else {
+          // Pattern copy
+          const sr = src.r1 + ((r - top) % sh + sh) % sh;
+          const sc = src.c1 + ((c - left) % sw + sw) % sw;
+          this.grid[r][c] = this.grid[sr][sc];
+        }
+      }
+    }
+    this.sheet!.data = this.packData();
+  }
+  private detectIncrementType(val: string): 'number'|'letter'|'date'|'none' {
+    if (/^-?\d+(?:\.\d+)?$/.test(val)) return 'number';
+    if (/^[A-Za-z]$/.test(val)) return 'letter';
+    const d = new Date(val); if (!isNaN(d.getTime())) return 'date';
+    return 'none';
+  }
+  private incrementValue(val: string, steps: number, type: 'number'|'letter'|'date'): string {
+    if (type==='number'){ const n = parseFloat(val); const out = n + steps; return String(out); }
+    if (type==='letter'){ const code = val.charCodeAt(0); const base = code>=97?97:65; const offset = (code - base + steps) % 26; return String.fromCharCode(base + (offset<0?offset+26:offset)); }
+    if (type==='date'){ const d = new Date(val); d.setDate(d.getDate()+steps); const yyyy=d.getFullYear(); const mm=String(d.getMonth()+1).padStart(2,'0'); const dd=String(d.getDate()).padStart(2,'0'); return `${yyyy}-${mm}-${dd}`; }
+    return val;
+  }
 
   // Context menu
   contextOpen = false;
   contextX = 0; contextY = 0;
   contextTarget: { type: 'cell'|'row'|'col', r?: number, c?: number } | null = null;
-  contextItems: { divider?: boolean, label?: string, key?: string }[] = [];
+  contextItems: { divider?: boolean, label?: string, key?: string, children?: { label: string, key: string }[] }[] = [];
+  submenu: { x: number, y: number, items: { label: string, key: string }[] } | null = null;
 
   openContext(e: MouseEvent, type: 'cell'|'row'|'col', r?: number, c?: number){
     e.preventDefault();
@@ -630,7 +713,7 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
   }
   closeContext(){ this.contextOpen = false; this.contextItems = []; this.contextTarget = null; }
   private buildContextItems(){
-    const items: { divider?: boolean, label?: string, key?: string }[] = [];
+    const items: { divider?: boolean, label?: string, key?: string, children?: { label: string, key: string }[] }[] = [];
     if (!this.contextTarget) { this.contextItems = []; return; }
     const t = this.contextTarget.type;
     if (t === 'cell' || t === 'row'){
@@ -670,14 +753,16 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
       items.push({ label: 'Format as text', key: 'fmtText' });
       items.push({ label: 'Format as number', key: 'fmtNumber' });
       items.push({ label: 'Format as date', key: 'fmtDate' });
-      items.push({ divider: true });
-      items.push({ label: 'Number: 0 decimals', key: 'num0' });
-      items.push({ label: 'Number: 2 decimals', key: 'num2' });
-      items.push({ label: 'Number: Currency (USD)', key: 'currencyUSD' });
-      items.push({ label: 'Number: Percent', key: 'percent' });
-      items.push({ divider: true });
-      items.push({ label: 'Date: YYYY-MM-DD', key: 'dateISO' });
-      items.push({ label: 'Date: MM/DD/YYYY', key: 'dateMDY' });
+      items.push({ label: 'Number format', key: 'numSub', children: [
+        { label: '0 decimals', key: 'num0' },
+        { label: '2 decimals', key: 'num2' },
+        { label: 'Currency (USD)', key: 'currencyUSD' },
+        { label: 'Percent', key: 'percent' },
+      ]});
+      items.push({ label: 'Date format', key: 'dateSub', children: [
+        { label: 'YYYY-MM-DD', key: 'dateISO' },
+        { label: 'MM/DD/YYYY', key: 'dateMDY' },
+      ]});
       items.push({ divider: true });
       items.push({ label: 'Align left', key: 'alignLeft' });
       items.push({ label: 'Align center', key: 'alignCenter' });
@@ -685,6 +770,9 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
     }
     this.contextItems = items;
   }
+  openSubmenu(item: any, ev: MouseEvent){ if (!item || !item.children) { this.submenu=null; return; } const parent = (ev.target as HTMLElement).closest('button') as HTMLElement; if (!parent) return; const pr = parent.getBoundingClientRect(); const pane = document.body.getBoundingClientRect(); this.submenu = { x: (pr.right - pane.left) - this.contextX + 10, y: (pr.top - pane.top) - this.contextY, items: item.children };
+  }
+  maybeCloseSubmenu(_e: MouseEvent){ /* keep submenu open while moving into it */ }
   onContextAction(item: { divider?: boolean, label?: string, key?: string }){
     const t = this.contextTarget;
     if (!t) return;

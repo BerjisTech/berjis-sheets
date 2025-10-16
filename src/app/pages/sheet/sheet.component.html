@@ -42,6 +42,10 @@
   <div class="flex flex-wrap items-center gap-1 p-2 rounded bg-blue-200 sticky mt-3 top-0 z-10">
     <button class="px-2 py-1 border rounded" (click)="addRow()">+ Row</button>
     <button class="px-2 py-1 border rounded" (click)="addCol()">+ Column</button>
+    <label class="ml-2 text-xs flex items-center gap-1">
+      <input type="checkbox" [(ngModel)]="showFormatted" [ngModelOptions]="{standalone:true}" />
+      Show formatted values (read-only)
+    </label>
   </div>
 
 </div>
@@ -80,7 +84,9 @@
             (mouseenter)="onCellMouseEnter(v.ri, ci)"
             (contextmenu)="openContext($event, 'cell', v.ri, ci)">
           <input class="w-full px-2 py-1 outline-none"
-            [(ngModel)]="grid[v.ri][ci]"
+            [readonly]="showFormatted"
+            [value]="showFormatted ? formatDisplay(v.ri, ci, grid[v.ri][ci]) : grid[v.ri][ci]"
+            (input)="onCellInput($event, v.ri, ci)"
             [ngModelOptions]="{standalone: true}"
             (ngModelChange)="queueSave()"
             [style.height.px]="rowHeights[v.ri]"
@@ -98,15 +104,29 @@
     <div *ngIf="selectionRect" class="absolute pointer-events-none border-2 border-dashed border-blue-500" [style.left.px]="selectionRect.x" [style.top.px]="selectionRect.y" [style.width.px]="selectionRect.w" [style.height.px]="selectionRect.h"></div>
   </table>
   <!-- Selection dashed outline overlay positioned relative to the scroll pane -->
-  <div *ngIf="selectionRect" class="absolute pointer-events-none border-2 border-dashed border-blue-500 z-5" [style.left.px]="selectionRect.x" [style.top.px]="selectionRect.y" [style.width.px]="selectionRect.w" [style.height.px]="selectionRect.h"></div>
+  <div *ngIf="selectionRect" class="absolute pointer-events-none selection-ants z-5" [style.left.px]="selectionRect.x" [style.top.px]="selectionRect.y" [style.width.px]="selectionRect.w" [style.height.px]="selectionRect.h"></div>
+  <!-- Fill handle and preview -->
+  <div *ngIf="selectionRect" class="absolute w-2 h-2 bg-blue-600 border border-white rounded-sm cursor-crosshair z-10"
+       [style.left.px]="selectionRect.x + selectionRect.w - 2"
+       [style.top.px]="selectionRect.y + selectionRect.h - 2"
+       (mousedown)="startFillDrag($event)"></div>
+  <div *ngIf="fillPreviewRect" class="absolute pointer-events-none border-2 border-blue-400/60 z-5"
+       [style.left.px]="fillPreviewRect.x" [style.top.px]="fillPreviewRect.y" [style.width.px]="fillPreviewRect.w" [style.height.px]="fillPreviewRect.h"></div>
 </div>
 
 <!-- Context Menu -->
 <div *ngIf="contextOpen" class="fixed inset-0 z-[60000]" (click)="closeContext()">
-  <div class="absolute bg-white shadow rounded border text-sm py-1 min-w-[200px]" [style.left.px]="contextX" [style.top.px]="contextY" (click)="$event.stopPropagation()">
-    <div *ngFor="let item of contextItems">
+  <div class="absolute bg-white shadow rounded border text-sm py-1 min-w-[220px]" [style.left.px]="contextX" [style.top.px]="contextY" (click)="$event.stopPropagation()">
+    <div *ngFor="let item of contextItems" class="relative">
       <div *ngIf="item.divider" class="my-1 border-t"></div>
-      <button *ngIf="!item.divider" class="w-full text-left px-3 py-1 hover:bg-slate-100" (click)="onContextAction(item)">{{ item.label }}</button>
+      <button *ngIf="!item.divider" class="w-full text-left px-3 py-1 hover:bg-slate-100 flex items-center justify-between" (click)="!item.children && onContextAction(item)" (mouseenter)="openSubmenu(item, $event)" (mouseleave)="maybeCloseSubmenu($event)">
+        <span>{{ item.label }}</span>
+        <span *ngIf="item.children">▶</span>
+      </button>
+    </div>
+    <!-- Submenu -->
+    <div *ngIf="submenu && submenu.items && submenu.items.length" class="absolute bg-white shadow rounded border text-sm py-1 min-w-[200px]" [style.left.px]="submenu.x" [style.top.px]="submenu.y">
+      <button *ngFor="let si of submenu.items" class="block w-full text-left px-3 py-1 hover:bg-slate-100" (click)="onContextAction(si)">{{ si.label }}</button>
     </div>
   </div>
   </div>
