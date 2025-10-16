@@ -704,12 +704,12 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
       this.activeCell = { r, c }; this.rangeStart = { r, c }; this.rangeEnd = { r, c };
     }
     this.buildContextItems();
+    const { w: menuW, h: menuH } = this.measureMenu(this.contextItems);
     const vw = window.innerWidth, vh = window.innerHeight;
-    const menuW = 220, menuH = 260;
     let x = e.clientX, y = e.clientY;
     if (x + menuW > vw) x = Math.max(8, vw - menuW - 8);
     if (y + menuH > vh) y = Math.max(8, vh - menuH - 8);
-    this.contextX = x; this.contextY = y; this.contextOpen = true;
+    this.contextX = x; this.contextY = y; this.contextOpen = true; this.submenu=null;
   }
   closeContext(){ this.contextOpen = false; this.contextItems = []; this.contextTarget = null; }
   private buildContextItems(){
@@ -770,9 +770,30 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
     }
     this.contextItems = items;
   }
-  openSubmenu(item: any, ev: MouseEvent){ if (!item || !item.children) { this.submenu=null; return; } const parent = (ev.target as HTMLElement).closest('button') as HTMLElement; if (!parent) return; const pr = parent.getBoundingClientRect(); const pane = document.body.getBoundingClientRect(); this.submenu = { x: (pr.right - pane.left) - this.contextX + 10, y: (pr.top - pane.top) - this.contextY, items: item.children };
+  openSubmenu(item: any, ev: MouseEvent){
+    if (!item || !item.children) { this.submenu=null; return; }
+    const parent = (ev.target as HTMLElement).closest('button') as HTMLElement; if (!parent) return;
+    const pr = parent.getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const { w: subW, h: subH } = this.measureMenu(item.children);
+    // Preferred to the right
+    let relX = (pr.right) - this.contextX + 8;
+    // If offscreen to the right, open to the left
+    if (this.contextX + relX + subW > vw - 8) {
+      relX = (pr.left) - this.contextX - subW - 8;
+    }
+    let relY = (pr.top) - this.contextY;
+    // Clamp vertically
+    if (this.contextY + relY + subH > vh - 8) relY = Math.max(0, vh - subH - this.contextY - 8);
+    this.submenu = { x: relX, y: relY, items: item.children };
   }
   maybeCloseSubmenu(_e: MouseEvent){ /* keep submenu open while moving into it */ }
+
+  private measureMenu(items: { divider?: boolean, label?: string, key?: string, children?: any[] }[]): { w: number, h: number } {
+    const w = 240;
+    const h = items.reduce((acc, it) => acc + (it.divider ? 8 : 28), 6);
+    return { w, h };
+  }
   onContextAction(item: { divider?: boolean, label?: string, key?: string }){
     const t = this.contextTarget;
     if (!t) return;
