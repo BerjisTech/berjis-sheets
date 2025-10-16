@@ -73,10 +73,10 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
       case 'rename': this.showRename(); break;
       case 'download': this.downloadCsv(); break;
       case 'print': window.print(); break;
-      case 'rowAbove': this.grid.unshift(Array.from({ length: this.grid[0]?.length||10 },()=>'')); this.queueSave(); break;
-      case 'rowBelow': this.addRow(); break;
-      case 'colLeft': for(const row of this.grid) row.unshift(''); this.queueSave(); break;
-      case 'colRight': this.addCol(); break;
+      case 'rowAbove': { const [start] = this.getSelectedRowBounds() || [0,0]; this.insertRowAt(start); break; }
+      case 'rowBelow': { const [,end] = this.getSelectedRowBounds() || [this.grid.length-1,this.grid.length-1]; this.insertRowAt(end+1); break; }
+      case 'colLeft': { const [cstart] = this.getSelectedColBounds() || [0,0]; this.insertColAt(cstart); break; }
+      case 'colRight': { const [,cend] = this.getSelectedColBounds() || [ (this.grid[0]?.length||0)-1, (this.grid[0]?.length||0)-1 ]; this.insertColAt(cend+1); break; }
       case 'undo': document.execCommand('undo'); break;
       case 'redo': document.execCommand('redo'); break;
       default: break;
@@ -300,6 +300,65 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
   }
   isCellMulti(ri: number, ci: number): boolean { return this.multiSelected.has(`${ri}-${ci}`); }
   isCellSelected(ri: number, ci: number): boolean { return this.isCellActive(ri, ci) || this.isCellInRange(ri, ci) || this.isCellMulti(ri, ci); }
+  private getSelectedRowBounds(): [number, number] | null {
+    // Determine selection from range, multi, or active cell
+    let rows: number[] = [];
+    if (this.rangeStart && this.rangeEnd) {
+      const r1 = Math.min(this.rangeStart.r, this.rangeEnd.r);
+      const r2 = Math.max(this.rangeStart.r, this.rangeEnd.r);
+      rows = [r1, r2];
+    } else if (this.multiSelected.size) {
+      const set = new Set<number>();
+      for (const k of this.multiSelected) { const r = parseInt(k.split('-')[0], 10); if (!Number.isNaN(r)) set.add(r); }
+      const arr = Array.from(set.values()).sort((a,b)=>a-b);
+      if (arr.length) rows = [arr[0], arr[arr.length-1]];
+    } else if (this.activeCell) {
+      rows = [this.activeCell.r, this.activeCell.r];
+    }
+    if (!rows.length) return null;
+    const start = Math.max(0, Math.min(this.grid.length-1, rows[0]));
+    const end = Math.max(0, Math.min(this.grid.length-1, rows[1]));
+    return [Math.min(start,end), Math.max(start,end)];
+  }
+  private getSelectedColBounds(): [number, number] | null {
+    let cols: number[] = [];
+    if (this.rangeStart && this.rangeEnd) {
+      const c1 = Math.min(this.rangeStart.c, this.rangeEnd.c);
+      const c2 = Math.max(this.rangeStart.c, this.rangeEnd.c);
+      cols = [c1, c2];
+    } else if (this.multiSelected.size) {
+      const set = new Set<number>();
+      for (const k of this.multiSelected) { const c = parseInt(k.split('-')[1], 10); if (!Number.isNaN(c)) set.add(c); }
+      const arr = Array.from(set.values()).sort((a,b)=>a-b);
+      if (arr.length) cols = [arr[0], arr[arr.length-1]];
+    } else if (this.activeCell) {
+      cols = [this.activeCell.c, this.activeCell.c];
+    }
+    const maxC = Math.max(0, (this.grid[0]?.length||1)-1);
+    if (!cols.length) return null;
+    const start = Math.max(0, Math.min(maxC, cols[0]));
+    const end = Math.max(0, Math.min(maxC, cols[1]));
+    return [Math.min(start,end), Math.max(start,end)];
+  }
+
+  private insertRowAt(index: number){
+    const cols = this.grid[0]?.length || 0;
+    index = Math.max(0, Math.min(this.grid.length, index));
+    this.grid.splice(index, 0, Array.from({ length: cols }, () => ''));
+    this.rowHeights.splice(index, 0, this.defaultRowHeight);
+    this.recomputeRowOffsets();
+    this.sheet!.data = this.packData();
+    this.queueSave();
+  }
+  private insertColAt(index: number){
+    const rows = this.grid.length;
+    const maxC = this.grid[0]?.length || 0;
+    index = Math.max(0, Math.min(maxC, index));
+    for (let r = 0; r < rows; r++) this.grid[r].splice(index, 0, '');
+    this.colWidths.splice(index, 0, this.defaultColWidth);
+    this.sheet!.data = this.packData();
+    this.queueSave();
+  }
 
   // Column resizing
   resizingCol: { index: number, startX: number, startW: number } | null = null;
@@ -423,5 +482,107 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
     const paddingY = cs ? (parseFloat(cs.paddingTop||'4') + parseFloat(cs.paddingBottom||'4')) : 8;
     const lines = String(text).split(/\r?\n/).length;
     return Math.ceil(lines * lineH + paddingY);
+  }
+
+  // Context menu
+  contextOpen = false;
+  contextX = 0; contextY = 0;
+  contextTarget: { type: 'cell'|'row'|'col', r?: number, c?: number } | null = null;
+  contextItems: { divider?: boolean, label?: string, key?: string }[] = [];
+
+  openContext(e: MouseEvent, type: 'cell'|'row'|'col', r?: number, c?: number){
+    e.preventDefault();
+    this.contextTarget = { type, r, c };
+    // Update selection to reflect context target for clarity
+    if (type === 'row' && typeof r === 'number') this.selectRow(r);
+    if (type === 'col' && typeof c === 'number') this.selectColumn(c);
+    if (type === 'cell' && typeof r === 'number' && typeof c === 'number'){
+      this.activeCell = { r, c }; this.rangeStart = { r, c }; this.rangeEnd = { r, c };
+    }
+    this.buildContextItems();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const menuW = 220, menuH = 260;
+    let x = e.clientX, y = e.clientY;
+    if (x + menuW > vw) x = Math.max(8, vw - menuW - 8);
+    if (y + menuH > vh) y = Math.max(8, vh - menuH - 8);
+    this.contextX = x; this.contextY = y; this.contextOpen = true;
+  }
+  closeContext(){ this.contextOpen = false; this.contextItems = []; this.contextTarget = null; }
+  private buildContextItems(){
+    const items: { divider?: boolean, label?: string, key?: string }[] = [];
+    if (!this.contextTarget) { this.contextItems = []; return; }
+    const t = this.contextTarget.type;
+    if (t === 'cell' || t === 'row'){
+      items.push({ label: 'Insert row above', key: 'insertRowAbove' });
+      items.push({ label: 'Insert row below', key: 'insertRowBelow' });
+      items.push({ label: 'Duplicate row', key: 'dupRow' });
+    }
+    if (t === 'cell' || t === 'col'){
+      items.push({ label: 'Insert column left', key: 'insertColLeft' });
+      items.push({ label: 'Insert column right', key: 'insertColRight' });
+      items.push({ label: 'Duplicate column', key: 'dupCol' });
+    }
+    if (t === 'cell'){
+      items.push({ divider: true });
+      const r = this.contextTarget.r!, c = this.contextTarget.c!;
+      const val = (this.grid[r]?.[c] ?? '').toString();
+      const isDate = /^\d{4}-\d{2}-\d{2}$/.test(val) || /\d{1,2}\/\d{1,2}\/\d{2,4}/.test(val);
+      const isNumber = /^-?\d+(?:\.\d+)?$/.test(val);
+      if (isDate) {
+        items.push({ label: 'Format date…', key: 'fmtDate' });
+      } else if (isNumber) {
+        items.push({ label: 'Format number…', key: 'fmtNumber' });
+      } else {
+        items.push({ label: 'Text format…', key: 'fmtText' });
+      }
+      items.push({ label: 'Align left', key: 'alignLeft' });
+      items.push({ label: 'Align center', key: 'alignCenter' });
+      items.push({ label: 'Align right', key: 'alignRight' });
+    }
+    this.contextItems = items;
+  }
+  onContextAction(item: { divider?: boolean, label?: string, key?: string }){
+    const t = this.contextTarget;
+    if (!t) return;
+    const rowIndexFor = (pos: 'above'|'below') => {
+      if (t.r != null) return pos==='above'? t.r : t.r+1;
+      const b = this.getSelectedRowBounds(); if (!b) return pos==='above'? 0 : this.grid.length;
+      return pos==='above'? b[0] : b[1]+1;
+    };
+    const colIndexFor = (pos: 'left'|'right') => {
+      if (t.c != null) return pos==='left'? t.c : t.c+1;
+      const b = this.getSelectedColBounds(); if (!b) return pos==='left'? 0 : (this.grid[0]?.length||0);
+      return pos==='left'? b[0] : b[1]+1;
+    };
+    switch(item.key){
+      case 'insertRowAbove': this.insertRowAt(rowIndexFor('above')); break;
+      case 'insertRowBelow': this.insertRowAt(rowIndexFor('below')); break;
+      case 'insertColLeft': this.insertColAt(colIndexFor('left')); break;
+      case 'insertColRight': this.insertColAt(colIndexFor('right')); break;
+      case 'dupRow': {
+        const target = (t.r != null) ? t.r : (this.getSelectedRowBounds()?.[0] ?? 0);
+        const src = this.grid[target]; if (!src) break;
+        const copy = src.slice(); this.grid.splice(target+1, 0, copy);
+        this.rowHeights.splice(target+1, 0, this.rowHeights[target]||this.defaultRowHeight);
+        this.recomputeRowOffsets(); this.sheet!.data = this.packData(); this.queueSave();
+        break;
+      }
+      case 'dupCol': {
+        const target = (t.c != null) ? t.c : (this.getSelectedColBounds()?.[0] ?? 0);
+        for (let r=0; r<this.grid.length; r++){
+          const val = this.grid[r]?.[target] ?? '';
+          this.grid[r].splice(target+1, 0, val);
+        }
+        this.colWidths.splice(target+1, 0, this.colWidths[target]||this.defaultColWidth);
+        this.sheet!.data = this.packData(); this.queueSave();
+        break;
+      }
+      // Placeholder formatting actions
+      case 'fmtDate': case 'fmtNumber': case 'fmtText': case 'alignLeft': case 'alignCenter': case 'alignRight':
+        // Not implemented yet; keep menu interactive
+        break;
+      default: break;
+    }
+    this.closeContext();
   }
 }
