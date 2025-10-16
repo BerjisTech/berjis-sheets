@@ -50,7 +50,7 @@
 
 </div>
 
-<div #editorMainPane class="h-[calc(100vh-155px)] mt-2 z-[1] overflow-auto bg-white relative" (mouseup)="endResizing()" (contextmenu)="$event.preventDefault()">
+<div #editorMainPane class="h-[calc(100vh-155px)] mt-2 z-[1] overflow-auto bg-white relative pb-12" (mouseup)="endResizing()" (contextmenu)="$event.preventDefault()">
   <table class="text-sm table-fixed border-collapse relative" [style.width.px]="totalTableWidth">
     <colgroup>
       <col [style.width.px]="40" />
@@ -132,10 +132,11 @@
 </div>
 
 <!-- Tabs Bar -->
-  <div class="mt-2 bg-gray-50 border-t border-gray-200 flex items-center gap-2 px-2 py-1 overflow-x-auto">
-  <button *ngFor="let s of tabs; let i=index" class="px-3 py-1 rounded flex items-center gap-2"
+<div class="mt-2 bg-gray-50 border-t border-gray-200 flex items-center gap-2 px-2 py-1 overflow-x-auto fixed left-0 right-0 bottom-0 z-20">
+  <button *ngFor="let s of tabs; let i=index" class="px-3 py-1 rounded flex items-center gap-2 relative"
           [class.bg-white]="i===activeTabIndex" [class.shadow]="i===activeTabIndex" [class.border]="i===activeTabIndex"
-          (click)="setActiveSheet(i)" (dblclick)="renameSheet(i)">
+          (click)="setActiveSheet(i)" (dblclick)="renameSheet(i)" (contextmenu)="openContext($event,'tab', undefined, undefined, i)">
+    <span class="inline-block w-2 h-2 rounded-full mr-2 border" [style.backgroundColor]="s.color||'#ffffff'" [style.borderColor]="s.color||'#d1d5db'"></span>
     <span class="truncate max-w-[160px]">{{ s.name }}</span>
     <span *ngIf="tabs.length>1" class="text-gray-400 hover:text-red-600" (click)="$event.stopPropagation(); deleteSheet(i)">✕</span>
   </button>

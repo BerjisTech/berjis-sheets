@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { SheetsService, SheetDoc, defaultGrid } from '../../sheets.service';
 type CellMeta = { align?: 'left'|'center'|'right', format?: 'text'|'number'|'date', numberPreset?: 'num0'|'num2'|'currencyUSD'|'percent', datePreset?: 'dateISO'|'dateMDY' };
-type SheetData = { name: string; grid: string[][]; colWidths: number[]; rowHeights: number[]; meta: (CellMeta|null)[][] };
+type SheetData = { name: string; color?: string; grid: string[][]; colWidths: number[]; rowHeights: number[]; meta: (CellMeta|null)[][] };
 
 @Component({
   standalone: true,
@@ -591,13 +591,14 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
     const colWidths = Array.from({ length: grid[0]?.length || 0 }, () => this.defaultColWidth);
     const rowHeights = Array.from({ length: grid.length }, () => this.defaultRowHeight);
     const meta = Array.from({ length: grid.length }, () => Array.from({ length: grid[0]?.length || 0 }, () => null));
-    return { name, grid, colWidths, rowHeights, meta };
+    return { name, color: undefined, grid, colWidths, rowHeights, meta };
   }
   setActiveSheet(i: number){ if (i<0 || i>=this.tabs.length) return; this.activeTabIndex = i; this.applyActiveSheet(); this.updateViewport(); this.queueSave(); }
   private applyActiveSheet(){ const s = this.tabs[this.activeTabIndex]; this.grid = s.grid; this.colWidths = s.colWidths; this.rowHeights = s.rowHeights; this.meta = s.meta; this.recomputeRowOffsets(); }
   addSheet(){ const n = this.tabs.length+1; const s = this.makeSheet(`Sheet${n}`, defaultGrid(1000,26)); this.tabs.push(s); this.setActiveSheet(this.tabs.length-1); }
   renameSheet(i: number){ const cur = this.tabs[i]?.name || `Sheet${i+1}`; const name = prompt('Rename sheet', cur); if (name!=null) { this.tabs[i].name = name.trim() || cur; this.queueSave(); } }
   deleteSheet(i: number){ if (this.tabs.length<=1) return; this.tabs.splice(i,1); if (this.activeTabIndex>=this.tabs.length) this.activeTabIndex=this.tabs.length-1; this.applyActiveSheet(); this.queueSave(); }
+  duplicateSheet(i: number){ const s = this.tabs[i]; const copy: SheetData = { name: s.name + ' (Copy)', color: s.color, grid: s.grid.map(row=>row.slice()), colWidths: s.colWidths.slice(), rowHeights: s.rowHeights.slice(), meta: s.meta.map(r=>r.map(c=> c ? { ...c } : null)) }; this.tabs.splice(i+1, 0, copy); this.setActiveSheet(i+1); }
 
   // Measure helpers
   private measureCtx?: CanvasRenderingContext2D;
@@ -713,13 +714,13 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
   // Context menu
   contextOpen = false;
   contextX = 0; contextY = 0;
-  contextTarget: { type: 'cell'|'row'|'col', r?: number, c?: number } | null = null;
+  contextTarget: { type: 'cell'|'row'|'col'|'tab', r?: number, c?: number, tabIndex?: number } | null = null;
   contextItems: { divider?: boolean, label?: string, key?: string, children?: { label: string, key: string }[] }[] = [];
   submenu: { x: number, y: number, items: { label: string, key: string }[] } | null = null;
 
-  openContext(e: MouseEvent, type: 'cell'|'row'|'col', r?: number, c?: number){
+  openContext(e: MouseEvent, type: 'cell'|'row'|'col'|'tab', r?: number, c?: number, tabIndex?: number){
     e.preventDefault();
-    this.contextTarget = { type, r, c };
+    this.contextTarget = { type, r, c, tabIndex } as any;
     // Update selection to reflect context target for clarity
     if (type === 'row' && typeof r === 'number') this.selectRow(r);
     if (type === 'col' && typeof c === 'number') this.selectColumn(c);
@@ -739,6 +740,25 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
     const items: { divider?: boolean, label?: string, key?: string, children?: { label: string, key: string }[] }[] = [];
     if (!this.contextTarget) { this.contextItems = []; return; }
     const t = this.contextTarget.type;
+    if (t === 'tab'){
+      items.push({ label: 'Rename', key: 'tabRename' });
+      items.push({ label: 'Duplicate', key: 'tabDuplicate' });
+      items.push({ label: 'Delete', key: 'tabDelete' });
+      items.push({ divider: true });
+      items.push({ label: 'Move left', key: 'tabMoveLeft' });
+      items.push({ label: 'Move right', key: 'tabMoveRight' });
+      items.push({ divider: true });
+      items.push({ label: 'Tab color', key: 'tabColorSub', children: [
+        { label: 'Blue', key: 'tabColor:#3b82f6' },
+        { label: 'Green', key: 'tabColor:#10b981' },
+        { label: 'Purple', key: 'tabColor:#8b5cf6' },
+        { label: 'Orange', key: 'tabColor:#f59e0b' },
+        { label: 'Red', key: 'tabColor:#ef4444' },
+        { label: 'Gray', key: 'tabColor:#6b7280' },
+        { label: 'None', key: 'tabColor:' }
+      ]});
+      this.contextItems = items; return;
+    }
     if (t === 'cell' || t === 'row'){
       items.push({ label: 'Insert row above', key: 'insertRowAbove' });
       items.push({ label: 'Insert row below', key: 'insertRowBelow' });
@@ -820,6 +840,20 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
   onContextAction(item: { divider?: boolean, label?: string, key?: string }){
     const t = this.contextTarget;
     if (!t) return;
+    if (t.type === 'tab'){
+      const idx = t.tabIndex ?? this.activeTabIndex;
+      switch(item.key){
+        case 'tabRename': this.renameSheet(idx); break;
+        case 'tabDuplicate': this.duplicateSheet(idx); break;
+        case 'tabDelete': this.deleteSheet(idx); break;
+        case 'tabMoveLeft': if (idx>0){ const [s]=this.tabs.splice(idx,1); this.tabs.splice(idx-1,0,s); this.setActiveSheet(idx-1); } break;
+        case 'tabMoveRight': if (idx<this.tabs.length-1){ const [s]=this.tabs.splice(idx,1); this.tabs.splice(idx+1,0,s); this.setActiveSheet(idx+1); } break;
+        default:
+          if (item.key?.startsWith('tabColor:')){ const color = item.key.split(':')[1] || undefined; this.tabs[idx].color = color; this.queueSave(); }
+          break;
+      }
+      this.closeContext(); return;
+    }
     const rowIndexFor = (pos: 'above'|'below') => {
       if (t.r != null) return pos==='above'? t.r : t.r+1;
       const b = this.getSelectedRowBounds(); if (!b) return pos==='above'? 0 : this.grid.length;
