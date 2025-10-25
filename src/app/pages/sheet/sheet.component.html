@@ -50,16 +50,16 @@
 
 </div>
 
-<div #editorMainPane class="h-[calc(100vh-155px)] mt-2 z-[1] overflow-auto bg-white relative pb-12" (mouseup)="endResizing()" (contextmenu)="$event.preventDefault()">
+<div #editorMainPane class="h-[calc(100vh-155px)] mt-2 z-[1] overflow-auto bg-white relative pb-12" (mouseup)="endResizing()" (contextmenu)="$event.preventDefault()" [style.zoom]="zoom">
   <table class="text-sm table-fixed border-collapse relative" [style.width.px]="totalTableWidth">
     <colgroup>
       <col [style.width.px]="40" />
       <col *ngFor="let _ of (grid && grid[0] ? grid[0] : []); let ci = index" [style.width.px]="colWidths[ci]" />
     </colgroup>
-    <thead class="sticky top-0 z-20">
+    <thead [class.sticky]="freezeHeader" [class.top-0]="freezeHeader" [class.z-20]="freezeHeader">
       <tr #headerRow>
-        <th class="border py-1 bg-gray-50 w-[10px] sticky left-0 z-30"></th>
-        <th class="border px-2 py-1 bg-gray-50 relative select-none" *ngFor="let _ of (grid && grid[0] ? grid[0] : []); let ci = index" [style.width.px]="colWidths[ci]" (click)="selectColumn(ci)" (contextmenu)="openContext($event, 'col', undefined, ci)">
+        <th class="border py-1 bg-gray-50 w-[10px]" [class.sticky]="freezeHeader" [class.left-0]="freezeHeader" [class.z-30]="freezeHeader" [class.border-transparent]="!showGridlines"></th>
+        <th class="border px-2 py-1 bg-gray-50 relative select-none" *ngFor="let _ of (grid && grid[0] ? grid[0] : []); let ci = index" [style.width.px]="colWidths[ci]" (click)="selectColumn(ci)" (contextmenu)="openContext($event, 'col', undefined, ci)" [class.border-transparent]="!showGridlines">
           {{ colLabel(ci) }}
           <div class="absolute -right-1 top-0 h-full w-2 cursor-col-resize z-10" (mousedown)="startColResize(ci, $event)" (dblclick)="autoSizeCol(ci)"></div>
         </th>
@@ -70,11 +70,11 @@
       <tr *ngIf="topSpacer > 0"><td class="p-0" [attr.colspan]="(grid[0]?.length||0)+1" [style.height.px]="topSpacer"></td></tr>
 
       <tr *ngFor="let v of visibleRows; let i = index; trackBy: trackVisibleRow">
-        <th class="border px-2 py-1 bg-gray-50 text-right w-[10px] relative select-none sticky left-0 z-10" [style.height.px]="rowHeights[v.ri]" (click)="selectRow(v.ri)" (contextmenu)="openContext($event, 'row', v.ri, undefined)">
+        <th class="border px-2 py-1 bg-gray-50 text-right w-[10px] relative select-none" [class.sticky]="freezeHeader" [class.left-0]="freezeHeader" [class.z-10]="freezeHeader" [style.height.px]="rowHeights[v.ri]" (click)="selectRow(v.ri)" (contextmenu)="openContext($event, 'row', v.ri, undefined)" [class.border-transparent]="!showGridlines">
           {{ v.ri+1 }}
           <div class="absolute left-0 bottom-0 h-1 w-full cursor-row-resize" (mousedown)="startRowResize(v.ri, $event)" (dblclick)="autoSizeRow(v.ri)"></div>
         </th>
-        <td class="border p-0"
+        <td class="border p-0" [class.border-transparent]="!showGridlines" [class.bg-red-50]="!isValid(v.ri, ci)"
             *ngFor="let cell of v.row; let ci = index; trackBy: trackCol"
             [class.bg-blue-50]="isCellSelected(v.ri, ci)"
             [class.outline]="isCellActive(v.ri, ci)"
@@ -83,17 +83,32 @@
             (mousedown)="onCellMouseDown($event, v.ri, ci)"
             (mouseenter)="onCellMouseEnter(v.ri, ci)"
             (contextmenu)="openContext($event, 'cell', v.ri, ci)">
-          <input class="w-full px-2 py-1 outline-none"
-            [readonly]="showFormatted"
-            [value]="showFormatted ? formatDisplay(v.ri, ci, grid[v.ri][ci]) : grid[v.ri][ci]"
-            (input)="onCellInput($event, v.ri, ci)"
-            [ngModelOptions]="{standalone: true}"
-            (ngModelChange)="queueSave()"
-            [style.height.px]="rowHeights[v.ri]"
-            [style.textAlign]="cellAlign(v.ri, ci)"
-            [attr.type]="cellInputType(v.ri, ci)"
-            [attr.inputmode]="cellInputType(v.ri, ci)==='number' ? 'decimal' : null"
-            (keydown)="onCellKeydown($event, v.ri, ci)" (paste)="onCellPaste($event, v.ri, ci)" [attr.data-rc]="v.ri+'-'+ci" autocomplete="off" spellcheck="false" />
+          <ng-container *ngIf="!cellWrap(v.ri, ci); else wrapTextarea">
+            <input class="w-full px-2 py-1 outline-none"
+              [spellcheck]="spellCheckEnabled"
+              [readonly]="showFormatted"
+              [value]="showFormatted ? formatDisplay(v.ri, ci, grid[v.ri][ci]) : grid[v.ri][ci]"
+              (input)="onCellInput($event, v.ri, ci)"
+              [ngModelOptions]="{standalone: true}"
+              (ngModelChange)="queueSave()"
+              [style.height.px]="rowHeights[v.ri]"
+              [style.textAlign]="cellAlign(v.ri, ci)"
+              [attr.type]="cellInputType(v.ri, ci)"
+              [attr.inputmode]="cellInputType(v.ri, ci)==='number' ? 'decimal' : null"
+              (keydown)="onCellKeydown($event, v.ri, ci)" (paste)="onCellPaste($event, v.ri, ci)" [attr.data-rc]="v.ri+'-'+ci" autocomplete="off" />
+          </ng-container>
+          <ng-template #wrapTextarea>
+            <textarea class="w-full px-2 py-1 outline-none resize-none"
+              [spellcheck]="spellCheckEnabled"
+              [readOnly]="showFormatted"
+              [value]="showFormatted ? formatDisplay(v.ri, ci, grid[v.ri][ci]) : grid[v.ri][ci]"
+              (input)="onCellInput($event, v.ri, ci)"
+              [ngModelOptions]="{standalone: true}"
+              (ngModelChange)="queueSave()"
+              [style.height.px]="rowHeights[v.ri]"
+              [style.textAlign]="cellAlign(v.ri, ci)"
+              (keydown)="onCellKeydown($event, v.ri, ci)" (paste)="onCellPaste($event, v.ri, ci)" [attr.data-rc]="v.ri+'-'+ci" autocomplete="off"></textarea>
+          </ng-template>
         </td>
       </tr>
 

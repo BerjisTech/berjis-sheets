@@ -5,7 +5,7 @@ import { firstValueFrom } from 'rxjs';
 export type SheetStatus = 'active'|'archived'|'deleted';
 export interface SheetDoc { id: string; title?: string; data?: any; status: SheetStatus; createdAt: string; updatedAt: string }
 
-const API_BASE = 'http://sheets-api.berjis.test';
+const API_BASE = 'http://sheets-api.berjis.tech';
 const STORAGE_KEY = 'berjis-sheets';
 
 @Injectable({ providedIn: 'root' })

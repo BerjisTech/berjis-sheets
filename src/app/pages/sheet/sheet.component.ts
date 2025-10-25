@@ -9,7 +9,7 @@ type SheetData = { name: string; color?: string; grid: string[][]; colWidths: nu
 @Component({
   standalone: true,
   selector: 'app-sheet',
-  imports: [CommonModule, FormsModule, RouterLink],
+  imports: [CommonModule, FormsModule],
   templateUrl: './sheet.component.html'
 })
 
@@ -25,6 +25,13 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
   openQuery = '';
   openRows: SheetDoc[] = [];
   openFiltered: SheetDoc[] = [];
+  // View and editor options
+  freezeHeader = true;
+  showGridlines = true;
+  zoom = 1;
+  spellCheckEnabled = true;
+  // Data validation state
+  private invalidMap = new Map<string, boolean>();
   contextMenus: { name: string, menus: { icon: string, name: string, action: string }[] }[] = [
     { name: 'File', menus: [
       { icon: '', name: 'New', action: 'new' },
@@ -79,10 +86,23 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
       case 'rename': this.showRename(); break;
       case 'download': this.downloadCsv(); break;
       case 'print': window.print(); break;
+      case 'settings': this.configureSettings(); break;
+      case 'freeze': this.freezeHeader = !this.freezeHeader; break;
+      case 'gridlines': this.showGridlines = !this.showGridlines; break;
+      case 'zoom': this.promptZoom(); break;
       case 'rowAbove': { const [start] = this.getSelectedRowBounds() || [0,0]; this.insertRowAt(start); break; }
       case 'rowBelow': { const [,end] = this.getSelectedRowBounds() || [this.grid.length-1,this.grid.length-1]; this.insertRowAt(end+1); break; }
       case 'colLeft': { const [cstart] = this.getSelectedColBounds() || [0,0]; this.insertColAt(cstart); break; }
       case 'colRight': { const [,cend] = this.getSelectedColBounds() || [ (this.grid[0]?.length||0)-1, (this.grid[0]?.length||0)-1 ]; this.insertColAt(cend+1); break; }
+      case 'function': this.insertFunction(); break;
+      case 'number': this.applyNumberPresetToSelection('num2'); break;
+      case 'wrap': this.toggleWrapSelection(); break;
+      case 'merge': this.mergeSelection(); break;
+      case 'sortRange': this.sortSelectedRange(); break;
+      case 'dataValidation': this.configureValidation(); break;
+      case 'spell': this.spellCheckEnabled = !this.spellCheckEnabled; break;
+      case 'addons': this.manageAddons(); break;
+      case 'help': this.openHelp('sheets'); break;
       case 'undo': document.execCommand('undo'); break;
       case 'redo': document.execCommand('redo'); break;
       default: break;
@@ -161,8 +181,29 @@ export class SheetPageComponent implements OnInit, AfterViewInit {
   }
 
   onTitleChange() { this.queueSave(); }
-  onCellChange(r: number, c: number, val: string) { if (!this.sheet) return; this.grid[r][c] = val; this.sheet.data = this.packData(); this.queueSave(); }
-  onCellInput(e: Event, r: number, c: number){ if (this.showFormatted) return; const val = (e.target as HTMLInputElement).value; this.onCellChange(r,c,val); }
+  onCellChange(r: number, c: number, val: string) { if (!this.sheet) return; this.grid[r][c] = val; this.validateCell(r,c); this.sheet.data = this.packData(); this.queueSave(); }
+  onCellInput(e: Event, r: number, c: number){ if (this.showFormatted) return; const val = (e.target as HTMLTextAreaElement|HTMLInputElement).value; this.onCellChange(r,c,val); }
+  private configureSettings(){
+    const current = localStorage.getItem('berjis_help_url_sheets') || localStorage.getItem('berjis_help_url') || '';
+    const url = prompt('Set Help URL for Sheets (leave blank to clear)', current || '');
+    if (url !== null) {
+      if (url.trim()) localStorage.setItem('berjis_help_url_sheets', url.trim()); else localStorage.removeItem('berjis_help_url_sheets');
+      alert('Help URL updated');
+    }
+  }
+  private promptZoom(){ const v = prompt('Zoom % (e.g. 100)', String(Math.round(this.zoom*100))); if (v!==null){ const f = parseFloat(v); if(!isNaN(f) && f>10 && f<=400) this.zoom = f/100; }}
+  private openHelp(app: 'docs'|'sheets'|'slides'|'pdf'){ const sp = localStorage.getItem(`berjis_help_url_${app}`); const g = localStorage.getItem('berjis_help_url'); const u = sp||g||`/help/${app}`; window.open(u, '_blank'); }
+  private insertFunction(){ if (!this.activeCell) { alert('Select a cell first.'); return; } const f = prompt('Enter a function (stored as text)', 'SUM(A1:A5)'); if (f!==null){ const {r,c}=this.activeCell; this.onCellChange(r,c,`=${f}`); }}
+  private sortSelectedRange(){ if (!this.rangeStart || !this.rangeEnd){ alert('Select a range to sort.'); return; } const r1 = Math.min(this.rangeStart.r, this.rangeEnd.r); const r2 = Math.max(this.rangeStart.r, this.rangeEnd.r); const c1 = Math.min(this.rangeStart.c, this.rangeEnd.c); const rows = []; for (let r=r1; r<=r2; r++){ rows.push({ r, key: String(this.grid[r][c1] ?? '') }); } rows.sort((a,b)=> a.key.localeCompare(b.key)); const originalRows = this.grid.slice(); const originalMeta = this.meta.slice(); const originalHeights = this.rowHeights.slice(); for (let i=0; i<rows.length; i++){ const src = rows[i].r; const dst = r1 + i; this.grid[dst] = originalRows[src]; this.meta[dst] = originalMeta[src]; this.rowHeights[dst] = originalHeights[src]; }
+    this.sheet!.data = this.packData(); this.queueSave(); }
+  cellWrap(r: number, c: number): boolean { return !!((this.meta[r]?.[c] as any)?.wrap); }
+  private toggleWrapSelection(){ this.forEachSelectedCell((r,c) => { const m = (this.meta[r] ||= []); const cur = (m[c]||{}) as any; cur.wrap = !cur.wrap; m[c]=cur; }); this.sheet!.data = this.packData(); this.queueSave(); }
+  private mergeSelection(){ if (!this.rangeStart || !this.rangeEnd){ alert('Select a range to merge.'); return; } const r1=Math.min(this.rangeStart.r,this.rangeEnd.r), r2=Math.max(this.rangeStart.r,this.rangeEnd.r), c1=Math.min(this.rangeStart.c,this.rangeEnd.c), c2=Math.max(this.rangeStart.c,this.rangeEnd.c); const top = this.grid[r1][c1] || ''; let combined = top; for (let r=r1; r<=r2; r++){ for (let c=c1; c<=c2; c++){ if (r===r1 && c===c1) continue; const v = this.grid[r][c]; if (v) combined += (combined?"\n":"") + v; this.grid[r][c] = ''; } } this.grid[r1][c1] = combined; this.sheet!.data = this.packData(); this.queueSave(); }
+  private configureValidation(){ if (!this.rangeStart || !this.rangeEnd){ alert('Select cells first.'); return; } const type = prompt('Validation: number | nonempty | list', 'number')?.trim().toLowerCase(); if (!type) return; let list: string[]|undefined; if (type==='list'){ const raw = prompt('Comma-separated allowed values', 'Yes,No'); list = (raw||'').split(',').map(s=>s.trim()).filter(Boolean); }
+    this.forEachSelectedCell((r,c)=>{ const m=(this.meta[r] ||= []); const cur = (m[c]||{}) as any; cur.validation = type==='list' ? { type:'list', list } : { type: (type==='nonempty'?'nonempty':'number') }; m[c]=cur; this.validateCell(r,c); }); this.sheet!.data=this.packData(); this.queueSave(); }
+  private validateCell(r: number, c: number){ const m = (this.meta[r]?.[c] as any)||{}; const v = String(this.grid[r]?.[c] ?? ''); let ok = true; if (m.validation){ const t = m.validation.type; if (t==='number') ok = /^-?\d+(?:\.\d+)?$/.test(v.trim()) || v.trim()===''; else if (t==='nonempty') ok = v.trim().length>0; else if (t==='list') ok = !m.validation.list || v.trim()==='' || m.validation.list.includes(v.trim()); } this.invalidMap.set(`${r}-${c}`, !ok); }
+  isValid(r: number, c: number): boolean { return !this.invalidMap.get(`${r}-${c}`); }
+  private manageAddons(){ const raw = localStorage.getItem('sheets_addons')||'[]'; let arr: string[]; try{ arr = JSON.parse(raw); if(!Array.isArray(arr)) arr=[]; }catch{ arr=[]; } const action = prompt(`Add-on manager: Installed ${arr.length}. Enter name to add or blank to list.`, ''); if (action===null) return; if (action.trim()){ arr.push(action.trim()); localStorage.setItem('sheets_addons', JSON.stringify(arr)); alert('Added.'); } else { alert('Installed: '+(arr.join(', ')||'(none)')); } }
 
   addRow() { this.grid.push(Array.from({ length: this.grid[0]?.length || 10 }, () => '')); this.meta.push(Array.from({ length: this.grid[0]?.length || 10 }, () => null)); this.rowHeights.push(this.defaultRowHeight); this.recomputeRowOffsets(); this.sheet!.data = this.packData(); this.queueSave(); }
   addCol() { for (let r=0; r<this.grid.length; r++){ this.grid[r].push(''); (this.meta[r] ||= []).push(null); } this.colWidths.push(this.defaultColWidth); this.sheet!.data = this.packData(); this.queueSave(); }
