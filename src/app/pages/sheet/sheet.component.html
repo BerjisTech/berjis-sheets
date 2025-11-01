@@ -1,221 +1,125 @@
-<div class="w-full h-[145px] overflow-visible ps-[30px] p-3 relative z-20">
-  <div class="h-[70px] flex items-center justify-start gap-3">
-    <a href="/" class="h-full w-[70px] bg-blue-400 rounded flex items-center justify-center">Icon</a>
-    <div class="flex-grow">
-      <div class="flex items-center-safe justify-start gap-2">
-        <input class="text-2xl font-semibold outline-none bg-transparent py-1" placeholder="Untitled document"
-          [(ngModel)]="sheet!.title" (ngModelChange)="onTitleChange()" />
+<div class="sheet-shell" *ngIf="workbook() as model; else loadingTpl">
+  <header class="sheet-appbar" role="banner">
+    <div class="sheet-appbar__left">
+      <a routerLink="/" class="sheet-appbar__product" aria-label="Sheets home">
+        <span class="sheet-appbar__product-logo">S</span>
+        <span class="sheet-appbar__product-text">Sheets</span>
+      </a>
+      <div class="sheet-appbar__meta">
+        <input
+          class="sheet-appbar__title"
+          [value]="sheetDoc()?.title ?? 'Untitled workbook'"
+          (input)="handleTitleInput($event)"
+        />
+        <div class="sheet-appbar__status">
+          <span class="status-indicator" [class.status-indicator--local]="sheetsService.syncMode === 'local'"></span>
+          <span>{{ sheetsService.syncMode === 'remote' ? 'Synced' : 'Offline mode' }}</span>
+          <span *ngIf="saving()">Saving…</span>
+          <span *ngIf="!saving() && sheetsService.lastSavedAt">
+            Saved {{ sheetsService.lastSavedAt | date: 'shortTime' }}
+          </span>
+        </div>
+        <a routerLink="/" class="sheet-appbar__breadcrumb">All workbooks</a>
+      </div>
+    </div>
+    <div class="sheet-appbar__right">
+      <div class="sheet-appbar__icon-group" role="toolbar" aria-label="Quick actions">
+        <button type="button" class="sheet-icon-btn" title="Print" (click)="onMenu('print')">⎙</button>
+        <button type="button" class="sheet-icon-btn" title="Download (.xlsx)" (click)="onMenu('download-xlsx')">⬇</button>
+      </div>
+      <button type="button" class="sheet-share-btn" (click)="onMenu('share')">Share</button>
+      <div class="sheet-avatar">U</div>
+    </div>
+  </header>
 
-        <div class="flex items-center gap-2 text-xs">
-          <span>start</span>
-          <span class="inline-block h-2 w-2 rounded-full" [class.bg-green-500]="sheets.syncMode==='remote'"
-            [class.bg-yellow-500]="sheets.syncMode==='local'"></span>
-          <span>Sync: {{ sheets.syncMode === 'remote' ? 'Server' : 'Local' }}</span>
-          <span *ngIf="sheets.isSaving" class="text-gray-500">• Saving…</span>
-          <span *ngIf="!sheets.isSaving && sheets.lastSavedAt" class="text-gray-500">• Saved {{ sheets.lastSavedAt |
-            date:'shortTime' }}</span>
-          <span *ngIf="sheets.lastError" class="text-red-600">• {{ sheets.lastError }}</span>
+  <nav class="sheet-menubar" role="navigation" aria-label="Workbook menus">
+    <ng-container *ngFor="let menu of contextMenus">
+      <div class="sheet-menubar__item">
+        <button type="button">{{ menu.name }}</button>
+        <div *ngIf="menu.actions.length" class="sheet-menubar__dropdown">
+          <button
+            type="button"
+            *ngFor="let action of menu.actions"
+            (click)="onMenu(action)"
+          >
+            {{ labelFor(action) }}
+          </button>
         </div>
       </div>
-      <div class="flex items-center justify-start">
-        <span *ngFor="let contextMenu of contextMenus"
-          class="group hover:bg-slate-200 px-3 rounded hover:shadow cursor-pointer relative">
-          {{contextMenu.name}}
-          <div
-            class="hidden group-hover:block absolute top-[100%] left-0 rounded shadow bg-white z-[50000] overflow-visible min-w-[200px]">
-            <div *ngFor="let menu of contextMenu.menus" class="p-2 hover:bg-slate-200 cursor-pointer"
-              (click)="onMenu(menu.action); $event.stopPropagation();">{{menu.name}}
-            </div>
-          </div>
-        </span>
-      </div>
-    </div>
-    <div class="h-full flex items-center justify-end gap-2">
-      <div>History</div>
-      <div>Comment</div>
-      <div>Share</div>
-      <div>Ai</div>
-      <div>User</div>
-    </div>
-  </div>
-
-  <div class="flex flex-wrap items-center gap-1 p-2 rounded bg-blue-200 sticky mt-3 top-0 z-10">
-    <button class="px-2 py-1 border rounded" (click)="addRow()">+ Row</button>
-    <button class="px-2 py-1 border rounded" (click)="addCol()">+ Column</button>
-    <label class="ml-2 text-xs flex items-center gap-1">
-      <input type="checkbox" [(ngModel)]="showFormatted" [ngModelOptions]="{standalone:true}" />
-      Show formatted values (read-only)
-    </label>
-  </div>
-
-</div>
-
-<div #editorMainPane class="h-[calc(100vh-155px)] mt-2 z-[1] overflow-auto bg-white relative pb-12" (mouseup)="endResizing()" (contextmenu)="$event.preventDefault()" [style.zoom]="zoom">
-  <table class="text-sm table-fixed border-collapse relative" [style.width.px]="totalTableWidth">
-    <colgroup>
-      <col [style.width.px]="40" />
-      <col *ngFor="let _ of (grid && grid[0] ? grid[0] : []); let ci = index" [style.width.px]="colWidths[ci]" />
-    </colgroup>
-    <thead [class.sticky]="freezeHeader" [class.top-0]="freezeHeader" [class.z-20]="freezeHeader">
-      <tr #headerRow>
-        <th class="border py-1 bg-gray-50 w-[10px]" [class.sticky]="freezeHeader" [class.left-0]="freezeHeader" [class.z-30]="freezeHeader" [class.border-transparent]="!showGridlines"></th>
-        <th class="border px-2 py-1 bg-gray-50 relative select-none" *ngFor="let _ of (grid && grid[0] ? grid[0] : []); let ci = index" [style.width.px]="colWidths[ci]" (click)="selectColumn(ci)" (contextmenu)="openContext($event, 'col', undefined, ci)" [class.border-transparent]="!showGridlines">
-          {{ colLabel(ci) }}
-          <div class="absolute -right-1 top-0 h-full w-2 cursor-col-resize z-10" (mousedown)="startColResize(ci, $event)" (dblclick)="autoSizeCol(ci)"></div>
-        </th>
-      </tr>
-    </thead>
-    <tbody *ngIf="grid && grid.length">
-      <!-- Top spacer -->
-      <tr *ngIf="topSpacer > 0"><td class="p-0" [attr.colspan]="(grid[0]?.length||0)+1" [style.height.px]="topSpacer"></td></tr>
-
-      <tr *ngFor="let v of visibleRows; let i = index; trackBy: trackVisibleRow">
-        <th class="border px-2 py-1 bg-gray-50 text-right w-[10px] relative select-none" [class.sticky]="freezeHeader" [class.left-0]="freezeHeader" [class.z-10]="freezeHeader" [style.height.px]="rowHeights[v.ri]" (click)="selectRow(v.ri)" (contextmenu)="openContext($event, 'row', v.ri, undefined)" [class.border-transparent]="!showGridlines">
-          {{ v.ri+1 }}
-          <div class="absolute left-0 bottom-0 h-1 w-full cursor-row-resize" (mousedown)="startRowResize(v.ri, $event)" (dblclick)="autoSizeRow(v.ri)"></div>
-        </th>
-        <td class="border p-0" [class.border-transparent]="!showGridlines" [class.bg-red-50]="!isValid(v.ri, ci)"
-            *ngFor="let cell of v.row; let ci = index; trackBy: trackCol"
-            [class.bg-blue-50]="isCellSelected(v.ri, ci)"
-            [class.outline]="isCellActive(v.ri, ci)"
-            [class.outline-blue-500]="isCellActive(v.ri, ci)"
-            [class.outline-2]="isCellActive(v.ri, ci)"
-            (mousedown)="onCellMouseDown($event, v.ri, ci)"
-            (mouseenter)="onCellMouseEnter(v.ri, ci)"
-            (contextmenu)="openContext($event, 'cell', v.ri, ci)">
-          <ng-container *ngIf="!cellWrap(v.ri, ci); else wrapTextarea">
-            <input class="w-full px-2 py-1 outline-none"
-              [spellcheck]="spellCheckEnabled"
-              [readonly]="showFormatted"
-              [value]="showFormatted ? formatDisplay(v.ri, ci, grid[v.ri][ci]) : grid[v.ri][ci]"
-              (input)="onCellInput($event, v.ri, ci)"
-              [ngModelOptions]="{standalone: true}"
-              (ngModelChange)="queueSave()"
-              [style.height.px]="rowHeights[v.ri]"
-              [style.textAlign]="cellAlign(v.ri, ci)"
-              [attr.type]="cellInputType(v.ri, ci)"
-              [attr.inputmode]="cellInputType(v.ri, ci)==='number' ? 'decimal' : null"
-              (keydown)="onCellKeydown($event, v.ri, ci)" (paste)="onCellPaste($event, v.ri, ci)" [attr.data-rc]="v.ri+'-'+ci" autocomplete="off" />
-          </ng-container>
-          <ng-template #wrapTextarea>
-            <textarea class="w-full px-2 py-1 outline-none resize-none"
-              [spellcheck]="spellCheckEnabled"
-              [readOnly]="showFormatted"
-              [value]="showFormatted ? formatDisplay(v.ri, ci, grid[v.ri][ci]) : grid[v.ri][ci]"
-              (input)="onCellInput($event, v.ri, ci)"
-              [ngModelOptions]="{standalone: true}"
-              (ngModelChange)="queueSave()"
-              [style.height.px]="rowHeights[v.ri]"
-              [style.textAlign]="cellAlign(v.ri, ci)"
-              (keydown)="onCellKeydown($event, v.ri, ci)" (paste)="onCellPaste($event, v.ri, ci)" [attr.data-rc]="v.ri+'-'+ci" autocomplete="off"></textarea>
-          </ng-template>
-        </td>
-      </tr>
-
-      <!-- Bottom spacer -->
-      <tr *ngIf="bottomSpacer > 0"><td class="p-0" [attr.colspan]="(grid[0]?.length||0)+1" [style.height.px]="bottomSpacer"></td></tr>
-    </tbody>
-    <!-- Selection dashed outline overlay -->
-    <div *ngIf="selectionRect" class="absolute pointer-events-none border-2 border-dashed border-blue-500" [style.left.px]="selectionRect.x" [style.top.px]="selectionRect.y" [style.width.px]="selectionRect.w" [style.height.px]="selectionRect.h"></div>
-  </table>
-  <!-- Selection dashed outline overlay positioned relative to the scroll pane -->
-  <div *ngIf="selectionRect" class="absolute pointer-events-none selection-ants z-5" [style.left.px]="selectionRect.x" [style.top.px]="selectionRect.y" [style.width.px]="selectionRect.w" [style.height.px]="selectionRect.h"></div>
-  <!-- Fill handle and preview -->
-  <div *ngIf="selectionRect" class="absolute w-2 h-2 bg-blue-600 border border-white rounded-sm cursor-crosshair z-10"
-       [style.left.px]="selectionRect.x + selectionRect.w - 2"
-       [style.top.px]="selectionRect.y + selectionRect.h - 2"
-       (mousedown)="startFillDrag($event)"></div>
-  <div *ngIf="fillPreviewRect" class="absolute pointer-events-none border-2 border-blue-400/60 z-5"
-       [style.left.px]="fillPreviewRect.x" [style.top.px]="fillPreviewRect.y" [style.width.px]="fillPreviewRect.w" [style.height.px]="fillPreviewRect.h"></div>
-</div>
-
-<!-- Context Menu -->
-<div *ngIf="contextOpen" class="fixed inset-0 z-[60000]" (click)="closeContext()">
-  <div class="absolute bg-white rounded-lg shadow-lg shadow-black/10 border border-gray-200 text-sm py-1 min-w-[220px]" [style.left.px]="contextX" [style.top.px]="contextY" (click)="$event.stopPropagation()">
-    <div *ngFor="let item of contextItems" class="relative">
-      <div *ngIf="item.divider" class="my-1 border-t border-gray-200"></div>
-      <button *ngIf="!item.divider" class="w-full text-left px-3 py-1 hover:bg-slate-100 flex items-center justify-between" (click)="!item.children && onContextAction(item)" (mouseenter)="openSubmenu(item, $event)" (mouseleave)="maybeCloseSubmenu($event)">
-        <span>{{ item.label }}</span>
-        <span *ngIf="item.children">▶</span>
-      </button>
-    </div>
-    <!-- Submenu -->
-    <div *ngIf="submenu && submenu.items && submenu.items.length" class="absolute bg-white rounded-lg shadow-lg shadow-black/10 border border-gray-200 text-sm py-1 min-w-[200px]" [style.left.px]="submenu.x" [style.top.px]="submenu.y">
-      <button *ngFor="let si of submenu.items" class="block w-full text-left px-3 py-1 hover:bg-slate-100" (click)="onContextAction(si)">{{ si.label }}</button>
-    </div>
-  </div>
-</div>
-
-<!-- Tabs Bar -->
-<div class="mt-2 bg-gray-50 border-t border-gray-200 flex items-center gap-2 px-2 py-1 overflow-x-auto fixed left-0 right-0 bottom-0 z-20">
-  <button *ngFor="let s of tabs; let i=index" class="px-3 py-1 rounded flex items-center gap-2 relative"
-          [class.bg-white]="i===activeTabIndex" [class.shadow]="i===activeTabIndex" [class.border]="i===activeTabIndex"
-          draggable="true"
-          (dragstart)="onTabDragStart($event, i)"
-          (dragover)="onTabDragOver($event, i)"
-          (drop)="onTabDrop($event, i)"
-          (click)="setActiveSheet(i)" (dblclick)="renameSheet(i)" (contextmenu)="openContext($event,'tab', undefined, undefined, i)">
-    <span class="inline-block w-2 h-2 rounded-full mr-2 border" [style.backgroundColor]="s.color||'#ffffff'" [style.borderColor]="s.color||'#d1d5db'"></span>
-    <ng-container *ngIf="renamingTabIndex!==i; else renamingTpl">
-      <span class="truncate max-w-[160px]">{{ s.name }}</span>
     </ng-container>
-    <ng-template #renamingTpl>
-      <input class="px-1 py-0.5 border rounded outline-none w-[160px]" [ngModel]="renamingTabName" [ngModelOptions]="{standalone:true}"
-             (ngModelChange)="renamingTabName=$event" (blur)="commitRenameSheet()"
-             (click)="$event.stopPropagation()" (keydown.enter)="commitRenameSheet()" (keydown.escape)="cancelRenameSheet()"
-             [attr.data-tab-input]="i" />
-    </ng-template>
-    <span *ngIf="tabs.length>1" class="text-gray-400 hover:text-red-600" (click)="$event.stopPropagation(); openDeleteConfirm(i)">✕</span>
-  </button>
-  <button class="ml-1 px-2 py-1 border rounded bg-white" (click)="addSheet()">+ Add sheet</button>
-  <div class="flex-grow"></div>
-  <div class="text-xs text-gray-500 pr-2">Sheets</div>
-</div>
+  </nav>
 
-<!-- Delete Sheet Confirm Modal -->
-<div *ngIf="confirmDeleteOpen" class="fixed inset-0 bg-black/30 flex items-center justify-center z-[60000]" (click)="cancelDelete()">
-  <div class="bg-white rounded-lg shadow-lg p-4 w-[400px]" (click)="$event.stopPropagation()">
-    <div class="text-lg font-semibold mb-2">Delete sheet?</div>
-    <div class="text-sm text-gray-600 mb-3">
-      <span *ngIf="deleteNonEmpty; else emptyTpl">The sheet "{{ deleteName }}" has content. This action cannot be undone.</span>
-      <ng-template #emptyTpl>Are you sure you want to delete "{{ deleteName }}"?</ng-template>
-    </div>
-    <div class="flex items-center justify-end gap-2">
-      <button class="px-3 py-1 border rounded" (click)="cancelDelete()">Cancel</button>
-      <button class="px-3 py-1 bg-red-600 text-white rounded" (click)="confirmDelete()">Delete</button>
+  <div class="sheet-formula" role="region" aria-label="Formula editor">
+    <div class="sheet-formula__label">fx</div>
+    <input
+      class="sheet-formula__input"
+      type="text"
+      spellcheck="false"
+      [value]="formulaBuffer()"
+      (input)="onFormulaInput($any($event.target).value)"
+      (keydown)="onFormulaKeydown($event)"
+    />
+    <div class="sheet-formula__toolbar">
+      <button
+        type="button"
+        class="sheet-formula__btn"
+        [class.sheet-formula__btn--active]="activeFormat().bold"
+        (click)="toggleBold()"
+        title="Bold"
+      >
+        B
+      </button>
+      <button
+        type="button"
+        class="sheet-formula__btn"
+        [class.sheet-formula__btn--active]="activeFormat().italic"
+        (click)="toggleItalic()"
+        title="Italic"
+      >
+        I
+      </button>
+      <div class="sheet-formula__divider"></div>
+      <select
+        class="sheet-formula__select"
+        [value]="activeFormat().numberFormat ?? 'plain'"
+        (change)="onNumberFormatChange($event)"
+      >
+        <option value="plain">Plain text</option>
+        <option value="number">Number</option>
+        <option value="currency">Currency (USD)</option>
+        <option value="percent">Percent</option>
+      </select>
     </div>
   </div>
- </div>
-
-<!-- Open Modal -->
-<div *ngIf="openModal" class="fixed inset-0 bg-black/30 flex items-center justify-center z-[60000]">
-  <div class="bg-white rounded shadow w-[900px] max-w-[90vw] p-5">
-    <div class="flex items-center justify-between mb-3">
-      <div class="text-lg font-semibold">Open Sheet</div>
-      <button class="px-2 py-1 border rounded" (click)="cancelOpen()">Close</button>
-    </div>
-    <input class="w-full border rounded px-3 py-2 mb-4" [(ngModel)]="openQuery" (ngModelChange)="onOpenQueryChange()"
-      placeholder="Search by title or cell content" />
-    <div class="grid grid-cols-5 auto-rows-[220px] gap-3">
-      <a (click)="openSheet(s)" *ngFor="let s of openFiltered" class="shadow rounded bg-slate-50 flex flex-col p-2 cursor-pointer hover:shadow-xl">
-        <div class="font-medium truncate">{{ s.title || 'Untitled' }}</div>
-        <div class="text-xs text-gray-500 mt-1">{{ s.updatedAt | date:'medium' }}</div>
-        <div class="flex-grow"></div>
-        <div class="text-blue-600 text-sm">Open</div>
-      </a>
-    </div>
+  <div class="sheet-status-banner" *ngIf="formulaError()" aria-live="polite" role="status">
+    {{ formulaError() }}
   </div>
+
+  <nav class="sheet-tabs" role="tablist" aria-label="Sheets">
+    <button
+      *ngFor="let tab of model.sheets; trackBy: trackSheet"
+      type="button"
+      class="sheet-tabs__tab"
+      [class.sheet-tabs__tab--active]="tab.id === model.activeSheetId"
+      (click)="setActiveSheet(tab.id)"
+      (dblclick)="renameSheet(tab.id)"
+    >
+      {{ tab.name }}
+    </button>
+    <button type="button" class="sheet-tabs__add" (click)="addSheet()">＋</button>
+  </nav>
+
+  <section class="sheet-body">
+    <app-sheet-workbench
+      [workbook]="model"
+      [readOnly]="false"
+      (workbookChange)="handleWorkbookChange($event)"
+      (selectionChange)="handleSelectionChange($event)"
+    ></app-sheet-workbench>
+    <div *ngIf="saveError()" class="error-banner">{{ saveError() }}</div>
+  </section>
 </div>
 
-<!-- Rename Modal -->
-<div *ngIf="renameModal" class="fixed inset-0 bg-black/30 flex items-center justify-center z-[60000]">
-  <div class="bg-white rounded shadow w-[520px] p-4">
-    <div class="text-lg font-semibold mb-2">Rename Sheet</div>
-    <label class="text-sm text-gray-600">Title</label>
-    <input class="w-full border rounded px-2 py-1 mt-1" [(ngModel)]="renameTitle" placeholder="Untitled" />
-    <div class="flex items-center justify-end gap-2 mt-3">
-      <button class="px-3 py-1 border rounded" (click)="cancelRename()">Cancel</button>
-      <button class="px-3 py-1 bg-blue-600 text-white rounded" (click)="confirmRename()">Save</button>
-    </div>
-  </div>
-</div>
+<ng-template #loadingTpl>
+  <div class="w-full h-full flex items-center justify-center text-slate-500">Loading workbook.</div>
+</ng-template>

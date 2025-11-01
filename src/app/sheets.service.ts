@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
+import { Workbook } from './workbench/workbook.model';
 
 export type SheetStatus = 'active'|'archived'|'deleted';
 export interface SheetDoc { id: string; title?: string; data?: any; status: SheetStatus; createdAt: string; updatedAt: string }
@@ -46,7 +47,14 @@ export class SheetsService {
   }
 
   async create(initial?: Partial<SheetDoc>): Promise<SheetDoc> {
-    const tmp: SheetDoc = { id: this.uuid(), title: initial?.title?.trim() || '', data: initial?.data ?? defaultGrid(), status: 'active', createdAt: this.now(), updatedAt: this.now() };
+    const tmp: SheetDoc = {
+      id: this.uuid(),
+      title: initial?.title?.trim() || '',
+      data: initial?.data ?? defaultWorkbook(initial?.title),
+      status: 'active',
+      createdAt: this.now(),
+      updatedAt: this.now()
+    };
     if (this.preferRemote) {
       try {
         this.beginSave();
@@ -83,4 +91,31 @@ export class SheetsService {
 
 export function defaultGrid(rows=1000, cols=26): string[][] {
   return Array.from({length: rows}, () => Array.from({length: cols}, () => ''));
+}
+
+export function defaultWorkbook(title?: string): Workbook {
+  const sheetId = `sheet_${crypto.randomUUID()}`;
+  return {
+    id: `wb_${crypto.randomUUID()}`,
+    title: title?.trim() || 'Untitled workbook',
+    locale: 'en',
+    showToolbar: true,
+    showFormulaBar: true,
+    showSheetTabs: true,
+    sheets: [
+      {
+        id: sheetId,
+        name: 'Sheet1',
+        order: 0,
+        visible: true,
+        celldata: [],
+        config: {
+          rowCount: 100,
+          columnCount: 26
+        }
+      }
+    ],
+    activeSheetId: sheetId,
+    updatedAt: new Date().toISOString()
+  };
 }

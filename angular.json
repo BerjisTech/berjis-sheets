@@ -22,7 +22,8 @@
             "assets": [
               { "glob": "manifest.webmanifest", "input": "src", "output": "/" },
               { "glob": "**/*", "input": "public" },
-              { "glob": "**/*", "input": ".well-known", "output": "/.well-known" }
+              { "glob": "**/*", "input": ".well-known", "output": "/.well-known" },
+              { "glob": "**/*", "input": "src/vendor", "output": "vendor" }
             ],
             "styles": ["src/styles.css"],
             "scripts": []

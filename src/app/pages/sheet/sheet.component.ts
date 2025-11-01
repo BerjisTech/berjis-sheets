@@ -1,1055 +1,789 @@
-import { Component, OnInit, ElementRef, ViewChild, AfterViewInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { Component, OnDestroy, OnInit, ViewChild, inject, signal, WritableSignal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { SheetWorkbenchComponent } from '../../workbench/sheet-workbench.component';
+import {
+  Workbook,
+  WorkbookSelection,
+  WorkbookSheet,
+  WorkbookCell,
+  CellFormat,
+  NumberFormat
+} from '../../workbench/workbook.model';
+
+declare global {
+  interface Window {
+    XLSX?: any;
+  }
+}
 import { SheetsService, SheetDoc, defaultGrid } from '../../sheets.service';
-type CellMeta = { align?: 'left'|'center'|'right', format?: 'text'|'number'|'date', numberPreset?: 'num0'|'num2'|'currencyUSD'|'percent', datePreset?: 'dateISO'|'dateMDY' };
-type SheetData = { name: string; color?: string; grid: string[][]; colWidths: number[]; rowHeights: number[]; meta: (CellMeta|null)[][] };
+import { Subscription, fromEvent } from 'rxjs';
+
+type MenuAction =
+  | 'new'
+  | 'open'
+  | 'rename'
+  | 'copy'
+  | 'download-xlsx'
+  | 'download-csv'
+  | 'settings'
+  | 'print'
+  | 'share'
+  | 'history';
 
 @Component({
   standalone: true,
   selector: 'app-sheet',
-  imports: [CommonModule, FormsModule],
-  templateUrl: './sheet.component.html'
+  templateUrl: './sheet.component.html',
+  styleUrls: ['./sheet.component.css'],
+  imports: [CommonModule, FormsModule, RouterLink, SheetWorkbenchComponent]
 })
+export class SheetPageComponent implements OnInit, OnDestroy {
+  @ViewChild(SheetWorkbenchComponent) workbench?: SheetWorkbenchComponent;
 
-export class SheetPageComponent implements OnInit, AfterViewInit {
-  sheet: SheetDoc | null = null;
-  grid: string[][] = defaultGrid();
-  meta: (CellMeta | null)[][] = [];
-  tabs: SheetData[] = [];
-  activeTabIndex = 0;
-  pendingSave?: any;
-  openModal = false;
-  openId = '';
-  openQuery = '';
-  openRows: SheetDoc[] = [];
-  openFiltered: SheetDoc[] = [];
-  // View and editor options
-  freezeHeader = true;
-  showGridlines = true;
-  zoom = 1;
-  spellCheckEnabled = true;
-  // Data validation state
-  private invalidMap = new Map<string, boolean>();
-  contextMenus: { name: string, menus: { icon: string, name: string, action: string }[] }[] = [
-    { name: 'File', menus: [
-      { icon: '', name: 'New', action: 'new' },
-      { icon: '', name: 'Open', action: 'open' },
-      { icon: '', name: 'Rename', action: 'rename' },
-      { icon: '', name: 'Make a copy', action: 'copy' },
-      { icon: '', name: 'Download (.csv)', action: 'download' },
-      { icon: '', name: 'Settings', action: 'settings' },
-      { icon: '', name: 'Print', action: 'print' }
-    ]},
-    { name: 'Edit', menus: [
-      { icon: '', name: 'Undo', action: 'undo' },
-      { icon: '', name: 'Redo', action: 'redo' }
-    ]},
-    { name: 'View', menus: [
-      { icon: '', name: 'Freeze', action: 'freeze' },
-      { icon: '', name: 'Gridlines', action: 'gridlines' },
-      { icon: '', name: 'Zoom', action: 'zoom' }
-    ]},
-    { name: 'Insert', menus: [
-      { icon: '', name: 'Row above', action: 'rowAbove' },
-      { icon: '', name: 'Row below', action: 'rowBelow' },
-      { icon: '', name: 'Column left', action: 'colLeft' },
-      { icon: '', name: 'Column right', action: 'colRight' },
-      { icon: '', name: 'Function', action: 'function' }
-    ]},
-    { name: 'Format', menus: [
-      { icon: '', name: 'Number', action: 'number' },
-      { icon: '', name: 'Text wrapping', action: 'wrap' },
-      { icon: '', name: 'Merge cells', action: 'merge' }
-    ]},
-    { name: 'Data', menus: [
-      { icon: '', name: 'Sort range', action: 'sortRange' },
-      { icon: '', name: 'Data validation', action: 'dataValidation' }
-    ]},
-    { name: 'Tools', menus: [
-      { icon: '', name: 'Spell check', action: 'spell' }
-    ]},
-    { name: 'Extensions', menus: [
-      { icon: '', name: 'Add-ons', action: 'addons' }
-    ]},
-    { name: 'Help', menus: [
-      { icon: '', name: 'Sheets help', action: 'help' }
-    ]},
-  ]
+  readonly sheetsService = inject(SheetsService);
+  private route = inject(ActivatedRoute);
+  private router = inject(Router);
 
-  onMenu(action: string){
-    switch(action){
-      case 'new': this.router.navigate(['/sheet','new']); break;
-      case 'open': { this.showOpen(); break; }
-      case 'copy': this.copySheet(); break;
-      case 'rename': this.showRename(); break;
-      case 'download': this.downloadCsv(); break;
-      case 'print': window.print(); break;
-      case 'settings': this.configureSettings(); break;
-      case 'freeze': this.freezeHeader = !this.freezeHeader; break;
-      case 'gridlines': this.showGridlines = !this.showGridlines; break;
-      case 'zoom': this.promptZoom(); break;
-      case 'rowAbove': { const [start] = this.getSelectedRowBounds() || [0,0]; this.insertRowAt(start); break; }
-      case 'rowBelow': { const [,end] = this.getSelectedRowBounds() || [this.grid.length-1,this.grid.length-1]; this.insertRowAt(end+1); break; }
-      case 'colLeft': { const [cstart] = this.getSelectedColBounds() || [0,0]; this.insertColAt(cstart); break; }
-      case 'colRight': { const [,cend] = this.getSelectedColBounds() || [ (this.grid[0]?.length||0)-1, (this.grid[0]?.length||0)-1 ]; this.insertColAt(cend+1); break; }
-      case 'function': this.insertFunction(); break;
-      case 'number': this.applyNumberPresetToSelection('num2'); break;
-      case 'wrap': this.toggleWrapSelection(); break;
-      case 'merge': this.mergeSelection(); break;
-      case 'sortRange': this.sortSelectedRange(); break;
-      case 'dataValidation': this.configureValidation(); break;
-      case 'spell': this.spellCheckEnabled = !this.spellCheckEnabled; break;
-      case 'addons': this.manageAddons(); break;
-      case 'help': this.openHelp('sheets'); break;
-      case 'undo': document.execCommand('undo'); break;
-      case 'redo': document.execCommand('redo'); break;
-      default: break;
+  sheetDoc: WritableSignal<SheetDoc | null> = signal(null);
+  workbook: WritableSignal<Workbook | null> = signal(null);
+  loading = signal(true);
+  saving = signal(false);
+  saveError: WritableSignal<string | null> = signal(null);
+  formulaBuffer = signal('');
+  formulaError = signal<string | null>(null);
+  activeFormat = signal<CellFormat>({});
+  contextMenus = [
+    { name: 'File', actions: ['new', 'open', 'rename', 'copy', 'download-xlsx', 'download-csv', 'print'] as MenuAction[] },
+    { name: 'Edit', actions: [] as MenuAction[] },
+    { name: 'Data', actions: ['settings'] as MenuAction[] },
+    { name: 'Collaborate', actions: ['share', 'history'] as MenuAction[] }
+  ];
+  private readonly actionLabels: Record<MenuAction, string> = {
+    new: 'New',
+    open: 'Open',
+    rename: 'Rename',
+    copy: 'Make a copy',
+    'download-xlsx': 'Download (.xlsx)',
+    'download-csv': 'Download (.csv)',
+    settings: 'Workbook settings',
+    print: 'Print',
+    share: 'Share & permissions',
+    history: 'Version history'
+  };
+
+  activeSelection = signal<WorkbookSelection | null>(null);
+  private autoSaveHandle: any;
+  private visibilitySub?: Subscription;
+  private xlsxLoader?: Promise<any>;
+
+  ngOnInit(): void {
+    this.bootstrap();
+    this.visibilitySub = fromEvent(document, 'visibilitychange').subscribe(() => {
+      if (!document.hidden) {
+        this.flushPendingSave();
+      }
+    });
+  }
+
+  labelFor(action: MenuAction): string {
+    return this.actionLabels[action] ?? action;
+  }
+
+  onFormulaInput(value: string): void {
+    this.formulaBuffer.set(value);
+  }
+
+  onFormulaKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      this.onFormulaCommit();
+    }
+    if (event.key === 'Tab') {
+      event.preventDefault();
+      this.onFormulaCommit();
     }
   }
 
-  private async copySheet(){
-    if (!this.sheet) return;
-    const created = await this.sheets.create({ title: (this.sheet.title||'Untitled')+' (Copy)', data: this.packData() });
-    this.sheet = created; this.router.navigate(['/sheet', created.id]);
-  }
-  private downloadCsv(){
-    const name = ((this.sheet?.title)||'sheet').replace(/\s+/g,'-').slice(0,80);
-    const csv = this.grid.map(row => row.map(cell => '"'+String(cell).replace(/"/g,'""')+'"').join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${name}.csv`; a.click(); URL.revokeObjectURL(a.href);
-  }
-  private async showOpen(){ this.openModal = true; try { this.openRows = await this.sheets.list(['active']); } catch { this.openRows = []; } this.openFiltered=[...this.openRows]; this.openQuery=''; }
-  onOpenQueryChange(){ const q=(this.openQuery||'').toLowerCase(); if(!q){ this.openFiltered=[...this.openRows]; return; } this.openFiltered = this.openRows.filter(s => (s.title||'').toLowerCase().includes(q) || JSON.stringify(s.data||'').toLowerCase().includes(q)); }
-  openSheet(s: SheetDoc){ this.openModal=false; this.router.navigate(['/sheet', s.id]); }
-  // Rename modal
-  renameModal = false; renameTitle = '';
-  private showRename(){ this.renameTitle=(this.sheet?.title||''); this.renameModal=true; }
-  confirmRename(){ if(!this.sheet){ this.renameModal=false; return; } this.sheet.title=(this.renameTitle||'').trim(); this.renameModal=false; this.onTitleChange(); }
-  cancelRename(){ this.renameModal=false; }
-  confirmOpen(){ const id=(this.openId||'').trim(); if (id){ this.openModal=false; this.router.navigate(['/sheet', id]); } }
-  cancelOpen(){ this.openModal=false; }
-
-  constructor(private route: ActivatedRoute, private router: Router, public sheets: SheetsService) { }
-
-  async ngOnInit() {
-    const id = this.route.snapshot.paramMap.get('id') || 'new';
-    this.sheet = { id, title: '', data: defaultGrid(), status: 'active', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
-    if (id !== 'new') {
-      const existing = this.sheets.get(id) || await this.sheets.fetch(id);
-      if (existing) this.sheet = existing; else { this.router.navigate(['/']); return; }
+  onFormulaCommit(): void {
+    const selection = this.activeSelection();
+    if (!selection) {
+      return;
     }
-    const data: any = this.sheet?.data;
-    if (data && Array.isArray(data.sheets)) {
-      // New multi-sheet format
-      this.tabs = data.sheets as SheetData[];
-      this.activeTabIndex = Math.min(Math.max(0, data.activeSheetIndex|0), this.tabs.length-1);
-      this.applyActiveSheet();
-    } else if (Array.isArray(data)) {
-      // Legacy: raw grid only
-      this.tabs = [ this.makeSheet('Sheet1', data as string[][]) ];
-      this.activeTabIndex = 0; this.applyActiveSheet();
-    } else if (data && Array.isArray(data.grid)) {
-      // Legacy: single sheet object
-      const grid = data.grid as string[][];
-      const colWidths = Array.isArray(data.colWidths) && data.colWidths.length ? data.colWidths.slice() : Array.from({ length: grid[0]?.length || 0 }, () => this.defaultColWidth);
-      const rowHeights = Array.isArray(data.rowHeights) && data.rowHeights.length ? data.rowHeights.slice() : Array.from({ length: grid.length }, () => this.defaultRowHeight);
-      const meta = Array.isArray((data as any).meta) ? (data as any).meta : Array.from({ length: grid.length }, () => Array.from({ length: grid[0]?.length||0 }, () => null));
-      this.tabs = [ { name: 'Sheet1', grid, colWidths, rowHeights, meta } ];
-      this.activeTabIndex=0; this.applyActiveSheet();
+    this.workbench?.applyExternalValue(this.formulaBuffer());
+  }
+
+  trackSheet = (_: number, sheet: WorkbookSheet) => sheet.id;
+
+  ngOnDestroy(): void {
+    if (this.autoSaveHandle) {
+      clearTimeout(this.autoSaveHandle);
+    }
+    this.visibilitySub?.unsubscribe();
+  }
+
+  async onMenu(action: MenuAction) {
+    switch (action) {
+      case 'new':
+        await this.createNewWorkbook();
+        break;
+      case 'open':
+        await this.router.navigate(['/']);
+        break;
+      case 'rename':
+        this.requestRename();
+        break;
+      case 'copy':
+        await this.duplicateCurrent();
+        break;
+      case 'download-xlsx':
+        await this.exportWorkbook('xlsx');
+        break;
+      case 'download-csv':
+        await this.exportWorkbook('csv');
+        break;
+      case 'print':
+        window.print();
+        break;
+      case 'share':
+        // Placeholder for the upcoming collaboration dialog
+        alert('Sharing UI coming soon');
+        break;
+      case 'history':
+        alert('Version history coming soon');
+        break;
+      case 'settings':
+        alert('Workbook settings coming soon');
+        break;
+    }
+  }
+
+  handleTitleInput(event: Event) {
+    const input = event.target instanceof HTMLInputElement ? event.target : null;
+    if (!input) {
+      return;
+    }
+    this.onTitleChange(input.value);
+  }
+
+  async onTitleChange(title: string) {
+    const doc = this.sheetDoc();
+    if (!doc) {
+      return;
+    }
+    doc.title = title;
+    this.sheetDoc.set({ ...doc });
+    this.queueSave();
+  }
+
+  handleWorkbookChange(workbook: Workbook) {
+    this.workbook.set(workbook);
+    const doc = this.sheetDoc();
+    if (!doc) {
+      return;
+    }
+    doc.data = workbook;
+    doc.updatedAt = new Date().toISOString();
+    this.sheetDoc.set({ ...doc });
+    this.syncFormulaBuffer(workbook, this.activeSelection());
+    this.queueSave();
+  }
+
+  handleSelectionChange(selection: WorkbookSelection) {
+    this.activeSelection.set(selection);
+    this.syncFormulaBuffer(this.workbook(), selection);
+  }
+
+  private syncFormulaBuffer(workbook?: Workbook | null, selection?: WorkbookSelection | null) {
+    const sourceWorkbook = workbook ?? this.workbook();
+    const active = selection ?? this.activeSelection();
+    if (!sourceWorkbook || !active) {
+      this.formulaBuffer.set('');
+      this.formulaError.set(null);
+      this.activeFormat.set({});
+      return;
+    }
+    const sheet = sourceWorkbook.sheets.find(s => s.id === active.sheetId);
+    if (!sheet) {
+      this.formulaBuffer.set('');
+      this.formulaError.set(null);
+      this.activeFormat.set({});
+      return;
+    }
+    const rowIndex = active.active?.row ?? active.rowRange[0];
+    const colIndex = active.active?.column ?? active.colRange[0];
+    const cell = sheet.celldata.find(item => item.r === rowIndex && item.c === colIndex);
+    if (cell && cell.v && typeof cell.v === 'object' && typeof (cell.v as any).f === 'string') {
+      this.formulaBuffer.set(`=${(cell.v as any).f}`);
     } else {
-      // New default
-      this.tabs = [ this.makeSheet('Sheet1', defaultGrid()) ];
-      this.activeTabIndex=0; this.applyActiveSheet();
+      const value = cell ? this.extractCellValue(cell.v) : '';
+      this.formulaBuffer.set(value != null ? String(value) : '');
     }
-    this.updateViewport();
+    const errorMessage =
+      cell && cell.v && typeof cell.v === 'object' && typeof (cell.v as any).error === 'string'
+        ? (cell.v as any).error
+        : null;
+    this.formulaError.set(errorMessage);
+    this.activeFormat.set(cell?.format ?? {});
   }
 
-  ngAfterViewInit(): void {
-    // Attach scroll listener after view init
-    setTimeout(() => {
-      this.editorMainPane?.nativeElement?.addEventListener('scroll', () => this.updateViewport());
-      window.addEventListener('mouseup', () => this.onGlobalMouseUp());
-      window.addEventListener('mousemove', (e) => { this.onGlobalMouseMove(e); if (this.draggingFill) { this.updateFillPreview(e); } });
-      window.addEventListener('mouseup', (e) => { if (this.draggingFill) this.applyFill(e); });
-      window.addEventListener('keydown', (e) => this.onGlobalKeyDown(e));
-      this.headerHeight = this.headerRow?.nativeElement?.offsetHeight || this.headerHeight;
-      window.addEventListener('resize', () => { this.headerHeight = this.headerRow?.nativeElement?.offsetHeight || this.headerHeight; });
-      this.updateViewport();
-    }, 0);
+  private async bootstrap(): Promise<void> {
+    this.loading.set(true);
+    const id = this.route.snapshot.paramMap.get('id');
+    if (id && id !== 'new') {
+      const existing = await this.sheetsService.fetch(id);
+      if (existing) {
+        this.sheetDoc.set(existing);
+        const workbook = this.toWorkbook(existing);
+        this.workbook.set(workbook);
+        this.syncFormulaBuffer(workbook, this.activeSelection());
+      }
+    }
+
+    if (!this.sheetDoc()) {
+      const created = await this.sheetsService.create({ title: 'Untitled workbook' });
+      this.sheetDoc.set(created);
+      const workbook = this.toWorkbook(created);
+      this.workbook.set(workbook);
+      this.syncFormulaBuffer(workbook, this.activeSelection());
+      await this.router.navigate(['/sheet', created.id], { replaceUrl: true });
+    }
+    this.loading.set(false);
   }
 
-  onTitleChange() { this.queueSave(); }
-  onCellChange(r: number, c: number, val: string) { if (!this.sheet) return; this.grid[r][c] = val; this.validateCell(r,c); this.sheet.data = this.packData(); this.queueSave(); }
-  onCellInput(e: Event, r: number, c: number){ if (this.showFormatted) return; const val = (e.target as HTMLTextAreaElement|HTMLInputElement).value; this.onCellChange(r,c,val); }
-  private configureSettings(){
-    const current = localStorage.getItem('berjis_help_url_sheets') || localStorage.getItem('berjis_help_url') || '';
-    const url = prompt('Set Help URL for Sheets (leave blank to clear)', current || '');
-    if (url !== null) {
-      if (url.trim()) localStorage.setItem('berjis_help_url_sheets', url.trim()); else localStorage.removeItem('berjis_help_url_sheets');
-      alert('Help URL updated');
+  private toWorkbook(doc: SheetDoc): Workbook {
+    const data = doc.data;
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      if (Array.isArray((data as any).sheets)) {
+        const raw = data as Workbook;
+        const sheets = (raw.sheets ?? []).map((sheet, index) => this.normalizeSheet(sheet, index));
+        const activeSheetId =
+          raw.activeSheetId && sheets.some(sheet => sheet.id === raw.activeSheetId)
+            ? raw.activeSheetId
+            : sheets.find(sheet => sheet.visible)?.id ?? sheets[0]?.id ?? this.generateSheetId();
+        return {
+          id: raw.id ?? doc.id,
+          title: raw.title ?? doc.title ?? 'Untitled workbook',
+          locale: raw.locale ?? 'en',
+          showToolbar: raw.showToolbar ?? true,
+          showFormulaBar: raw.showFormulaBar ?? true,
+          showSheetTabs: raw.showSheetTabs ?? true,
+          sheets,
+          activeSheetId,
+          updatedAt: raw.updatedAt ?? doc.updatedAt ?? new Date().toISOString()
+        };
+      }
+    }
+
+    if (
+      Array.isArray(data) &&
+      data.length &&
+      data.every(item => item && typeof item === 'object' && !Array.isArray(item))
+    ) {
+      const sheets = (data as any[]).map((sheet, index) => this.normalizeSheet(sheet, index));
+      const activeSheetId = sheets.find(sheet => sheet.visible)?.id ?? sheets[0]?.id ?? this.generateSheetId();
+      return {
+        id: doc.id ?? `wb_${crypto.randomUUID()}`,
+        title: doc.title ?? 'Untitled workbook',
+        locale: 'en',
+        showToolbar: true,
+        showFormulaBar: true,
+        showSheetTabs: true,
+        sheets,
+        activeSheetId,
+        updatedAt: doc.updatedAt ?? new Date().toISOString()
+      };
+    }
+
+    if (Array.isArray(data) && data.every(row => Array.isArray(row))) {
+      return this.createWorkbookFromGrid(doc, data as string[][]);
+    }
+
+    return this.createWorkbookFromGrid(doc, defaultGrid(200, 26));
+  }
+
+  private createWorkbookFromGrid(doc: SheetDoc, grid: string[][]): Workbook {
+    const sheetId = this.generateSheetId();
+    const celldata: WorkbookSheet['celldata'] = [];
+    grid.forEach((row, r) => {
+      row.forEach((value, c) => {
+        if (value && value !== '') {
+          celldata.push({
+            r,
+            c,
+            v: {
+              v: value,
+              m: value,
+              ct: { t: 's' }
+            }
+          });
+        }
+      });
+    });
+    return {
+      id: doc.id ?? `wb_${crypto.randomUUID()}`,
+      title: doc.title ?? 'Untitled workbook',
+      locale: 'en',
+      showToolbar: true,
+      showFormulaBar: true,
+      showSheetTabs: true,
+      sheets: [
+        {
+          id: sheetId,
+          name: 'Sheet1',
+          order: 0,
+          visible: true,
+          celldata,
+          config: {
+            rowCount: grid.length,
+            columnCount: grid[0]?.length ?? 0
+          }
+        }
+      ],
+      activeSheetId: sheetId,
+      updatedAt: doc.updatedAt ?? new Date().toISOString()
+    };
+  }
+
+  private normalizeSheet(input: Partial<WorkbookSheet> | any, index: number): WorkbookSheet {
+    const id = input?.id ?? this.generateSheetId();
+    const name = input?.name ?? `Sheet${index + 1}`;
+    const order = typeof input?.order === 'number' ? input.order : index;
+    const celldata = Array.isArray(input?.celldata) ? input.celldata : [];
+    const visible =
+      typeof input?.visible === 'boolean' ? input.visible : (input?.status ?? 1) !== 0;
+    const config = input?.config ?? {};
+    const normalizedConfig = {
+      rowCount: typeof config?.rowCount === 'number' ? config.rowCount : undefined,
+      columnCount: typeof config?.columnCount === 'number' ? config.columnCount : undefined
+    };
+    return {
+      id,
+      name,
+      order,
+      visible,
+      celldata,
+      config: normalizedConfig,
+      updatedAt: typeof input?.updatedAt === 'string' ? input.updatedAt : undefined
+    };
+  }
+
+  private generateSheetId(): string {
+    return `sheet_${crypto.randomUUID()}`;
+  }
+
+  private nextSheetName(workbook: Workbook): string {
+    const base = 'Sheet';
+    let index = workbook.sheets.length || 1;
+    const existing = new Set(workbook.sheets.map(sheet => sheet.name));
+    while (existing.has(`${base}${index}`)) {
+      index += 1;
+    }
+    return `${base}${index}`;
+  }
+
+  private queueSave() {
+    if (this.autoSaveHandle) {
+      clearTimeout(this.autoSaveHandle);
+    }
+    this.autoSaveHandle = setTimeout(() => this.flushPendingSave(), 1500);
+  }
+
+  private async flushPendingSave() {
+    if (this.saving()) {
+      return;
+    }
+    const doc = this.sheetDoc();
+    if (!doc) {
+      return;
+    }
+    this.saving.set(true);
+    this.saveError.set(null);
+    try {
+      const saved = await this.sheetsService.save(doc);
+      if (saved) {
+        this.sheetDoc.set(saved);
+      }
+    } catch (err: any) {
+      this.saveError.set(err?.message ?? 'Failed to save workbook');
+    } finally {
+      this.saving.set(false);
     }
   }
-  private promptZoom(){ const v = prompt('Zoom % (e.g. 100)', String(Math.round(this.zoom*100))); if (v!==null){ const f = parseFloat(v); if(!isNaN(f) && f>10 && f<=400) this.zoom = f/100; }}
-  private openHelp(app: 'docs'|'sheets'|'slides'|'pdf'){ const sp = localStorage.getItem(`berjis_help_url_${app}`); const g = localStorage.getItem('berjis_help_url'); const u = sp||g||`/help/${app}`; window.open(u, '_blank'); }
-  private insertFunction(){ if (!this.activeCell) { alert('Select a cell first.'); return; } const f = prompt('Enter a function (stored as text)', 'SUM(A1:A5)'); if (f!==null){ const {r,c}=this.activeCell; this.onCellChange(r,c,`=${f}`); }}
-  private sortSelectedRange(){ if (!this.rangeStart || !this.rangeEnd){ alert('Select a range to sort.'); return; } const r1 = Math.min(this.rangeStart.r, this.rangeEnd.r); const r2 = Math.max(this.rangeStart.r, this.rangeEnd.r); const c1 = Math.min(this.rangeStart.c, this.rangeEnd.c); const rows = []; for (let r=r1; r<=r2; r++){ rows.push({ r, key: String(this.grid[r][c1] ?? '') }); } rows.sort((a,b)=> a.key.localeCompare(b.key)); const originalRows = this.grid.slice(); const originalMeta = this.meta.slice(); const originalHeights = this.rowHeights.slice(); for (let i=0; i<rows.length; i++){ const src = rows[i].r; const dst = r1 + i; this.grid[dst] = originalRows[src]; this.meta[dst] = originalMeta[src]; this.rowHeights[dst] = originalHeights[src]; }
-    this.sheet!.data = this.packData(); this.queueSave(); }
-  cellWrap(r: number, c: number): boolean { return !!((this.meta[r]?.[c] as any)?.wrap); }
-  private toggleWrapSelection(){ this.forEachSelectedCell((r,c) => { const m = (this.meta[r] ||= []); const cur = (m[c]||{}) as any; cur.wrap = !cur.wrap; m[c]=cur; }); this.sheet!.data = this.packData(); this.queueSave(); }
-  private mergeSelection(){ if (!this.rangeStart || !this.rangeEnd){ alert('Select a range to merge.'); return; } const r1=Math.min(this.rangeStart.r,this.rangeEnd.r), r2=Math.max(this.rangeStart.r,this.rangeEnd.r), c1=Math.min(this.rangeStart.c,this.rangeEnd.c), c2=Math.max(this.rangeStart.c,this.rangeEnd.c); const top = this.grid[r1][c1] || ''; let combined = top; for (let r=r1; r<=r2; r++){ for (let c=c1; c<=c2; c++){ if (r===r1 && c===c1) continue; const v = this.grid[r][c]; if (v) combined += (combined?"\n":"") + v; this.grid[r][c] = ''; } } this.grid[r1][c1] = combined; this.sheet!.data = this.packData(); this.queueSave(); }
-  private configureValidation(){ if (!this.rangeStart || !this.rangeEnd){ alert('Select cells first.'); return; } const type = prompt('Validation: number | nonempty | list', 'number')?.trim().toLowerCase(); if (!type) return; let list: string[]|undefined; if (type==='list'){ const raw = prompt('Comma-separated allowed values', 'Yes,No'); list = (raw||'').split(',').map(s=>s.trim()).filter(Boolean); }
-    this.forEachSelectedCell((r,c)=>{ const m=(this.meta[r] ||= []); const cur = (m[c]||{}) as any; cur.validation = type==='list' ? { type:'list', list } : { type: (type==='nonempty'?'nonempty':'number') }; m[c]=cur; this.validateCell(r,c); }); this.sheet!.data=this.packData(); this.queueSave(); }
-  private validateCell(r: number, c: number){ const m = (this.meta[r]?.[c] as any)||{}; const v = String(this.grid[r]?.[c] ?? ''); let ok = true; if (m.validation){ const t = m.validation.type; if (t==='number') ok = /^-?\d+(?:\.\d+)?$/.test(v.trim()) || v.trim()===''; else if (t==='nonempty') ok = v.trim().length>0; else if (t==='list') ok = !m.validation.list || v.trim()==='' || m.validation.list.includes(v.trim()); } this.invalidMap.set(`${r}-${c}`, !ok); }
-  isValid(r: number, c: number): boolean { return !this.invalidMap.get(`${r}-${c}`); }
-  private manageAddons(){ const raw = localStorage.getItem('sheets_addons')||'[]'; let arr: string[]; try{ arr = JSON.parse(raw); if(!Array.isArray(arr)) arr=[]; }catch{ arr=[]; } const action = prompt(`Add-on manager: Installed ${arr.length}. Enter name to add or blank to list.`, ''); if (action===null) return; if (action.trim()){ arr.push(action.trim()); localStorage.setItem('sheets_addons', JSON.stringify(arr)); alert('Added.'); } else { alert('Installed: '+(arr.join(', ')||'(none)')); } }
 
-  addRow() { this.grid.push(Array.from({ length: this.grid[0]?.length || 10 }, () => '')); this.meta.push(Array.from({ length: this.grid[0]?.length || 10 }, () => null)); this.rowHeights.push(this.defaultRowHeight); this.recomputeRowOffsets(); this.sheet!.data = this.packData(); this.queueSave(); }
-  addCol() { for (let r=0; r<this.grid.length; r++){ this.grid[r].push(''); (this.meta[r] ||= []).push(null); } this.colWidths.push(this.defaultColWidth); this.sheet!.data = this.packData(); this.queueSave(); }
-
-  private queueSave() { if (!this.sheet) return; if (this.pendingSave) clearTimeout(this.pendingSave); this.pendingSave = setTimeout(() => this.save(), 400); }
-  private async ensureCreatedId() { if (this.sheet && this.sheet.id === 'new') { const hasTitle = !!this.sheet.title && this.sheet.title.trim().length > 0; const hasData = JSON.stringify(this.grid).length > 2; if (hasTitle || hasData) { const created = await this.sheets.create({ title: this.sheet.title, data: this.packData() }); this.sheet = created; this.router.navigate(['/sheet', created.id], { replaceUrl: true }); } } }
-  private async save() { if (!this.sheet) return; await this.ensureCreatedId(); if (!this.sheet) return; this.sheet.data = this.packData(); await this.sheets.save(this.sheet); }
-
-  colLabel(i: number): string {
-    // Convert 0-based index to Excel-like letters: 0->A, 25->Z, 26->AA
-    let n = i;
-    let s = '';
-    do { s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26) - 1; } while (n >= 0);
-    return s;
+  private async createNewWorkbook() {
+    const created = await this.sheetsService.create({ title: 'Untitled workbook' });
+    this.sheetDoc.set(created);
+    const workbook = this.toWorkbook(created);
+    this.workbook.set(workbook);
+    this.syncFormulaBuffer(workbook, this.activeSelection());
+    await this.router.navigate(['/sheet', created.id]);
   }
 
-  trackRow = (_: number, __: string[]) => _;
-  trackVisibleRow = (_: number, v: { ri: number, row: string[] }) => v.ri;
-  trackCol = (_: number, __: string) => _;
-
-  onCellKeydown(e: KeyboardEvent, ri: number, ci: number) {
-    // Basic navigation: arrows, Enter, Tab
-    const key = e.key;
-    // Clipboard shortcuts
-    if ((e.ctrlKey || (e as any).metaKey)) {
-      if (key.toLowerCase() === 'c') { e.preventDefault(); this.copySelection(); return; }
-      if (key.toLowerCase() === 'x') { e.preventDefault(); this.cutSelection(); return; }
-      // 'v' is handled via paste event so let it bubble
+  private requestRename() {
+    const title = prompt('Workbook title', this.sheetDoc()?.title ?? '');
+    if (title !== null) {
+      this.onTitleChange(title.trim());
     }
-    // Delete clears selected cells
-    if (key === 'Delete' || key === 'Backspace') { if (!this.isEditingInput(e)) { e.preventDefault(); this.clearSelectionValues(); return; } }
-    if (key === 'Enter') { e.preventDefault(); this.moveFocus(ri + 1, ci); return; }
-    if (key === 'Tab') { e.preventDefault(); if (e.shiftKey) this.moveFocus(ri, ci - 1); else this.moveFocus(ri, ci + 1); return; }
-    const nav = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'];
-    if (nav.includes(key)) {
-      e.preventDefault();
-      let r = ri, c = ci;
-      if (key === 'ArrowUp') r = Math.max(0, ri - 1);
-      if (key === 'ArrowDown') r = Math.min(this.grid.length - 1, ri + 1);
-      if (key === 'ArrowLeft') c = Math.max(0, ci - 1);
-      if (key === 'ArrowRight') c = Math.min((this.grid[0]?.length||1) - 1, ci + 1);
-      if (e.shiftKey) {
-        // Expand range from activeCell if exists, else from current
-        const start = this.activeCell || { r: ri, c: ci };
-        this.rangeStart = start; this.rangeEnd = { r, c }; this.activeCell = { r, c };
+  }
+
+  private async duplicateCurrent() {
+    const doc = this.sheetDoc();
+    if (!doc) {
+      return;
+    }
+    const workbook = this.workbook();
+    const copy = await this.sheetsService.create({
+      title: `${doc.title ?? 'Untitled workbook'} (copy)`,
+      data: workbook
+    });
+    this.sheetDoc.set(copy);
+    const nextWorkbook = this.toWorkbook(copy);
+    this.workbook.set(nextWorkbook);
+    this.syncFormulaBuffer(nextWorkbook, this.activeSelection());
+    await this.router.navigate(['/sheet', copy.id]);
+  }
+
+  addSheet(): void {
+    const current = this.workbook();
+    const doc = this.sheetDoc();
+    if (!current || !doc) {
+      return;
+    }
+    const sheetId = this.generateSheetId();
+    const name = this.nextSheetName(current);
+    const newSheet: WorkbookSheet = {
+      id: sheetId,
+      name,
+      order: current.sheets.length,
+      visible: true,
+      celldata: [],
+      config: {
+        rowCount: 100,
+        columnCount: 26
+      }
+    };
+    const updated: Workbook = {
+      ...current,
+      sheets: [...current.sheets, newSheet],
+      activeSheetId: sheetId,
+      updatedAt: new Date().toISOString()
+    };
+    this.workbook.set(updated);
+    doc.data = updated;
+    doc.updatedAt = updated.updatedAt;
+    this.sheetDoc.set({ ...doc });
+    const selection: WorkbookSelection = {
+      sheetId,
+      rowRange: [0, 0],
+      colRange: [0, 0],
+      active: { row: 0, column: 0 }
+    };
+    this.activeSelection.set(selection);
+    this.syncFormulaBuffer(updated, selection);
+    this.queueSave();
+  }
+
+  setActiveSheet(sheetId: string): void {
+    const current = this.workbook();
+    const doc = this.sheetDoc();
+    if (!current || !doc || sheetId === current.activeSheetId) {
+      return;
+    }
+    if (!current.sheets.some(sheet => sheet.id === sheetId)) {
+      return;
+    }
+    const updated: Workbook = {
+      ...current,
+      activeSheetId: sheetId,
+      updatedAt: new Date().toISOString()
+    };
+    this.workbook.set(updated);
+    doc.data = updated;
+    doc.updatedAt = updated.updatedAt;
+    this.sheetDoc.set({ ...doc });
+    const selection: WorkbookSelection = {
+      sheetId,
+      rowRange: [0, 0],
+      colRange: [0, 0],
+      active: { row: 0, column: 0 }
+    };
+    this.activeSelection.set(selection);
+    this.syncFormulaBuffer(updated, selection);
+    this.queueSave();
+  }
+
+  renameSheet(sheetId: string): void {
+    const current = this.workbook();
+    const doc = this.sheetDoc();
+    if (!current || !doc) {
+      return;
+    }
+    const target = current.sheets.find(sheet => sheet.id === sheetId);
+    if (!target) {
+      return;
+    }
+    const nameInput = prompt('Sheet name', target.name);
+    const name = nameInput?.trim();
+    if (!name || name === target.name) {
+      return;
+    }
+    const updatedSheets = current.sheets.map(sheet =>
+      sheet.id === sheetId ? { ...sheet, name, updatedAt: new Date().toISOString() } : sheet
+    );
+    const updated: Workbook = {
+      ...current,
+      sheets: updatedSheets,
+      updatedAt: new Date().toISOString()
+    };
+    this.workbook.set(updated);
+    doc.data = updated;
+    doc.updatedAt = updated.updatedAt;
+    this.sheetDoc.set({ ...doc });
+    this.queueSave();
+  }
+
+  toggleBold(): void {
+    this.updateActiveCell((cell, row, column) => {
+      const next: WorkbookCell = cell ? { ...cell } : { r: row, c: column };
+      const format: CellFormat = { ...(next.format ?? {}) };
+      format.bold = !format.bold;
+      const sanitized = this.sanitizeFormat(format);
+      if (sanitized) {
+        next.format = sanitized;
       } else {
-        this.rangeStart = null; this.rangeEnd = null; this.multiSelected.clear();
-        this.activeCell = { r, c };
+        delete next.format;
       }
-      this.moveFocus(r, c);
-    }
-    // Row/column selection shortcuts
-    if (key === ' ' && e.shiftKey) { e.preventDefault(); this.selectRow(ri); }
-    if (key === ' ' && ((e as any).ctrlKey || (e as any).metaKey)) { e.preventDefault(); this.selectColumn(ci); }
+      return !next.format && !this.cellHasValue(next) ? undefined : next;
+    });
   }
 
-  private isEditingInput(e: KeyboardEvent): boolean {
-    const target = e.target as HTMLElement | null;
-    return !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA');
-  }
-
-  // Clipboard handling
-  private async copySelection(){
-    const text = this.serializeSelectionToText();
-    try { await navigator.clipboard.writeText(text); } catch { this.fallbackCopy(text); }
-  }
-  private async cutSelection(){ this.copySelection(); this.clearSelectionValues(); }
-  private serializeSelectionToText(): string {
-    if (this.rangeStart && this.rangeEnd){
-      const r1 = Math.min(this.rangeStart.r, this.rangeEnd.r);
-      const r2 = Math.max(this.rangeStart.r, this.rangeEnd.r);
-      const c1 = Math.min(this.rangeStart.c, this.rangeEnd.c);
-      const c2 = Math.max(this.rangeStart.c, this.rangeEnd.c);
-      const lines: string[] = [];
-      for (let r=r1; r<=r2; r++){
-        const row = [] as string[];
-        for (let c=c1; c<=c2; c++) row.push(this.grid[r]?.[c] ?? '');
-        lines.push(row.join('\t'));
+  toggleItalic(): void {
+    this.updateActiveCell((cell, row, column) => {
+      const next: WorkbookCell = cell ? { ...cell } : { r: row, c: column };
+      const format: CellFormat = { ...(next.format ?? {}) };
+      format.italic = !format.italic;
+      const sanitized = this.sanitizeFormat(format);
+      if (sanitized) {
+        next.format = sanitized;
+      } else {
+        delete next.format;
       }
-      return lines.join('\n');
-    }
-    if (this.multiSelected.size){
-      const cells = Array.from(this.multiSelected).map(k=>k.split('-').map(n=>parseInt(n,10)) as [number,number]).sort((a,b)=> a[0]===b[0]? a[1]-b[1] : a[0]-b[0]);
-      // Output as single column, one per line
-      return cells.map(([r,c]) => this.grid[r]?.[c] ?? '').join('\n');
-    }
-    if (this.activeCell){ return String(this.grid[this.activeCell.r]?.[this.activeCell.c] ?? ''); }
-    return '';
+      return !next.format && !this.cellHasValue(next) ? undefined : next;
+    });
   }
-  private fallbackCopy(text: string){ const ta = document.createElement('textarea'); ta.value = text; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); } catch {} document.body.removeChild(ta); }
-  onCellPaste(e: ClipboardEvent, ri: number, ci: number){
-    const data = e.clipboardData?.getData('text/plain'); if (!data) return;
-    e.preventDefault();
-    const rows = data.split(/\r?\n/).map(line => line.split('\t'));
-    // Multi-selection paste behavior
-    if (this.multiSelected.size && rows.length === 1 && rows[0].length === 1){
-      const val = rows[0][0];
-      for (const k of Array.from(this.multiSelected)) { const [r,c]=k.split('-').map(n=>parseInt(n,10)); if (!Number.isNaN(r)&&!Number.isNaN(c)) this.grid[r][c] = val; }
-      this.sheet!.data = this.packData(); this.queueSave(); return;
-    }
-    // Range or single-cell paste: fill starting at active cell or current ri,ci
-    const startR = this.activeCell ? this.activeCell.r : ri;
-    const startC = this.activeCell ? this.activeCell.c : ci;
-    const maxR = this.grid.length;
-    const maxC = this.grid[0]?.length || 0;
-    for (let r=0; r<rows.length; r++){
-      for (let c=0; c<rows[r].length; c++){
-        const tr = startR + r, tc = startC + c;
-        if (tr < maxR && tc < maxC) this.grid[tr][tc] = rows[r][c];
+
+  onNumberFormatChange(event: Event): void {
+    const select = event.target as HTMLSelectElement;
+    const value = select?.value as NumberFormat;
+    this.setNumberFormat(value ?? 'plain');
+  }
+
+  setNumberFormat(format: NumberFormat): void {
+    this.updateActiveCell((cell, row, column) => {
+      const next: WorkbookCell = cell ? { ...cell } : { r: row, c: column };
+      const currentFormat: CellFormat = { ...(next.format ?? {}) };
+      if (format === 'plain') {
+        delete currentFormat.numberFormat;
+      } else {
+        currentFormat.numberFormat = format;
       }
-    }
-    this.sheet!.data = this.packData(); this.queueSave();
+      const sanitized = this.sanitizeFormat(currentFormat);
+      if (sanitized) {
+        next.format = sanitized;
+      } else {
+        delete next.format;
+      }
+      return !next.format && !this.cellHasValue(next) ? undefined : next;
+    });
   }
 
-  // Viewport virtualization
-  @ViewChild('editorMainPane') editorMainPane?: ElementRef<HTMLDivElement>;
-  @ViewChild('headerRow') headerRow?: ElementRef<HTMLTableRowElement>;
-  defaultRowHeight = 32; // px
-  defaultColWidth = 96;  // px
-  rowHeights: number[] = [];
-  colWidths: number[] = [];
-  rowOffsets: number[] = []; // cumulative top positions of rows
-  viewStartRow = 0;
-  viewRowCount = 40; // will be computed based on viewport
-  topSpacer = 0;
-  bottomSpacer = 0;
-  get totalTableWidth(): number { try { return 40 + (this.colWidths?.reduce((a,b)=>a+(b||this.defaultColWidth),0)||0); } catch { return 40 + (this.grid[0]?.length||0)*this.defaultColWidth; } }
-  headerHeight = 28;
-  showFormatted = false;
-
-  private initSizing() {
-    const rows = this.grid.length;
-    const cols = this.grid[0]?.length || 0;
-    this.rowHeights = Array.from({ length: rows }, () => this.defaultRowHeight);
-    this.colWidths = Array.from({ length: cols }, () => this.defaultColWidth);
-    this.recomputeRowOffsets();
-  }
-  private recomputeRowOffsets() {
-    this.rowOffsets = new Array(this.rowHeights.length + 1);
-    this.rowOffsets[0] = 0;
-    for (let i = 0; i < this.rowHeights.length; i++) this.rowOffsets[i + 1] = this.rowOffsets[i] + this.rowHeights[i];
-  }
-  private findRowAtOffset(offset: number): number {
-    // Linear scan is fine for 1000 rows; simple and robust with variable heights
-    const total = this.rowHeights.length;
-    let sum = 0;
-    for (let i = 0; i < total; i++) { sum += this.rowHeights[i]; if (sum > offset) return i; }
-    return Math.max(0, total - 1);
-  }
-  private findColAtOffset(offsetX: number): number {
-    // offsetX is from left of first data column (after row header)
-    let x = 0; const cols = this.colWidths.length;
-    for (let i=0; i<cols; i++){ const w = this.colWidths[i] || this.defaultColWidth; if (x + w > offsetX) return i; x += w; }
-    return Math.max(0, cols - 1);
-  }
-  updateViewport() {
-    const el = this.editorMainPane?.nativeElement; if (!el) return;
-    const scrollTop = el.scrollTop;
-    const vh = el.clientHeight || 600;
-    const start = this.findRowAtOffset(scrollTop);
-    let covered = 0; let end = start;
-    const need = vh + 200; // buffer
-    while (end < this.rowHeights.length && covered < need) { covered += this.rowHeights[end]; end++; }
-    this.viewStartRow = Math.max(0, start - 3);
-    const viewEnd = Math.min(this.grid.length, end + 3);
-    this.viewRowCount = Math.max(0, viewEnd - this.viewStartRow);
-    const before = this.rowOffsets[this.viewStartRow] || 0;
-    const after = (this.rowOffsets[this.rowOffsets.length - 1] || 0) - (this.rowOffsets[this.viewStartRow + this.viewRowCount] || 0);
-    this.topSpacer = before;
-    this.bottomSpacer = after;
-  }
-  get visibleRows(): { ri: number, row: string[] }[] {
-    const out: { ri: number, row: string[] }[] = [];
-    for (let i = 0; i < this.viewRowCount; i++) {
-      const ri = this.viewStartRow + i; if (ri >= this.grid.length) break;
-      out.push({ ri, row: this.grid[ri] });
-    }
-    return out;
-  }
-
-  // Selection handling
-  activeCell: { r: number, c: number } | null = null;
-  dragging = false;
-  rangeStart: { r: number, c: number } | null = null;
-  rangeEnd: { r: number, c: number } | null = null;
-  multiSelected = new Set<string>();
-
-  selectColumn(ci: number){
-    this.multiSelected.clear();
-    this.rangeStart = { r: 0, c: ci };
-    this.rangeEnd = { r: Math.max(0, this.grid.length-1), c: ci };
-    this.activeCell = { r: 0, c: ci };
-    this.ensureCellVisible(0, ci);
-  }
-  selectRow(ri: number){
-    this.multiSelected.clear();
-    this.rangeStart = { r: ri, c: 0 };
-    this.rangeEnd = { r: ri, c: Math.max(0, (this.grid[0]?.length||1)-1) };
-    this.activeCell = { r: ri, c: 0 };
-    this.ensureCellVisible(ri, 0);
-  }
-
-  onCellMouseDown(e: MouseEvent, ri: number, ci: number) {
-    if (e.shiftKey && this.activeCell) {
-      this.rangeStart = { r: this.activeCell.r, c: this.activeCell.c };
-      this.rangeEnd = { r: ri, c: ci };
-      this.activeCell = { r: ri, c: ci };
-      this.dragging = false; return;
-    }
-    if (e.ctrlKey || e.metaKey) {
-      const key = `${ri}-${ci}`;
-      if (this.multiSelected.has(key)) this.multiSelected.delete(key); else this.multiSelected.add(key);
-      this.activeCell = { r: ri, c: ci };
+  private updateActiveCell(
+    mutator: (cell: WorkbookCell | undefined, row: number, column: number) => WorkbookCell | undefined
+  ): void {
+    const workbook = this.workbook();
+    const doc = this.sheetDoc();
+    const selection = this.activeSelection();
+    if (!workbook || !doc || !selection) {
       return;
     }
-    this.activeCell = { r: ri, c: ci };
-    this.rangeStart = { r: ri, c: ci };
-    this.rangeEnd = { r: ri, c: ci };
-    this.dragging = true;
-  }
-  onCellMouseEnter(ri: number, ci: number) {
-    if (!this.dragging || !this.rangeStart) return;
-    this.rangeEnd = { r: ri, c: ci };
-  }
-  onGlobalMouseUp() { this.dragging = false; this.endResizing(); }
-  isCellActive(ri: number, ci: number): boolean { return !!this.activeCell && this.activeCell.r === ri && this.activeCell.c === ci; }
-  isCellInRange(ri: number, ci: number): boolean {
-    if (!this.rangeStart || !this.rangeEnd) return false;
-    const r1 = Math.min(this.rangeStart.r, this.rangeEnd.r);
-    const r2 = Math.max(this.rangeStart.r, this.rangeEnd.r);
-    const c1 = Math.min(this.rangeStart.c, this.rangeEnd.c);
-    const c2 = Math.max(this.rangeStart.c, this.rangeEnd.c);
-    return ri >= r1 && ri <= r2 && ci >= c1 && ci <= c2;
-  }
-  isCellMulti(ri: number, ci: number): boolean { return this.multiSelected.has(`${ri}-${ci}`); }
-  isCellSelected(ri: number, ci: number): boolean { return this.isCellActive(ri, ci) || this.isCellInRange(ri, ci) || this.isCellMulti(ri, ci); }
-  private initMeta(){ const rows = this.grid.length, cols = this.grid[0]?.length || 0; this.meta = Array.from({ length: rows }, () => Array.from({ length: cols }, () => null)); }
-  get selectionRect(): { x: number, y: number, w: number, h: number } | null {
-    let r1: number, r2: number, c1: number, c2: number;
-    if (this.rangeStart && this.rangeEnd){
-      r1 = Math.min(this.rangeStart.r, this.rangeEnd.r);
-      r2 = Math.max(this.rangeStart.r, this.rangeEnd.r);
-      c1 = Math.min(this.rangeStart.c, this.rangeEnd.c);
-      c2 = Math.max(this.rangeStart.c, this.rangeEnd.c);
-    } else if (this.activeCell){ r1 = r2 = this.activeCell.r; c1 = c2 = this.activeCell.c; }
-    else return null;
-    // Resolve DOM elements for first and last cell in range
-    const pane = this.editorMainPane?.nativeElement; if (!pane) return null;
-    const a = document.querySelector<HTMLInputElement>(`input[data-rc="${r1}-${c1}"]`);
-    const b = document.querySelector<HTMLInputElement>(`input[data-rc="${r2}-${c2}"]`);
-    if (!a || !b) return null;
-    const ar = a.getBoundingClientRect();
-    const br = b.getBoundingClientRect();
-    const pr = pane.getBoundingClientRect();
-    const x = (ar.left - pr.left) + pane.scrollLeft - 1; // adjust for border
-    const y = (ar.top - pr.top) + pane.scrollTop - 1;
-    const w = (br.right - ar.left) + 2;
-    const h = (br.bottom - ar.top) + 2;
-    return { x, y, w, h };
-  }
-  private clearSelectionValues(){
-    if (this.rangeStart && this.rangeEnd){
-      const r1 = Math.min(this.rangeStart.r, this.rangeEnd.r);
-      const r2 = Math.max(this.rangeStart.r, this.rangeEnd.r);
-      const c1 = Math.min(this.rangeStart.c, this.rangeEnd.c);
-      const c2 = Math.max(this.rangeStart.c, this.rangeEnd.c);
-      for (let r=r1; r<=r2; r++) for (let c=c1; c<=c2; c++) this.grid[r][c] = '';
-    } else if (this.multiSelected.size){
-      for (const k of this.multiSelected){ const [r,c] = k.split('-').map(n=>parseInt(n,10)); if (!Number.isNaN(r)&&!Number.isNaN(c)) this.grid[r][c]=''; }
-    } else if (this.activeCell){ this.grid[this.activeCell.r][this.activeCell.c] = ''; }
-    this.sheet!.data = this.packData(); this.queueSave();
-  }
-  private getSelectedRowBounds(): [number, number] | null {
-    // Determine selection from range, multi, or active cell
-    let rows: number[] = [];
-    if (this.rangeStart && this.rangeEnd) {
-      const r1 = Math.min(this.rangeStart.r, this.rangeEnd.r);
-      const r2 = Math.max(this.rangeStart.r, this.rangeEnd.r);
-      rows = [r1, r2];
-    } else if (this.multiSelected.size) {
-      const set = new Set<number>();
-      for (const k of this.multiSelected) { const r = parseInt(k.split('-')[0], 10); if (!Number.isNaN(r)) set.add(r); }
-      const arr = Array.from(set.values()).sort((a,b)=>a-b);
-      if (arr.length) rows = [arr[0], arr[arr.length-1]];
-    } else if (this.activeCell) {
-      rows = [this.activeCell.r, this.activeCell.r];
-    }
-    if (!rows.length) return null;
-    const start = Math.max(0, Math.min(this.grid.length-1, rows[0]));
-    const end = Math.max(0, Math.min(this.grid.length-1, rows[1]));
-    return [Math.min(start,end), Math.max(start,end)];
-  }
-  private getSelectedColBounds(): [number, number] | null {
-    let cols: number[] = [];
-    if (this.rangeStart && this.rangeEnd) {
-      const c1 = Math.min(this.rangeStart.c, this.rangeEnd.c);
-      const c2 = Math.max(this.rangeStart.c, this.rangeEnd.c);
-      cols = [c1, c2];
-    } else if (this.multiSelected.size) {
-      const set = new Set<number>();
-      for (const k of this.multiSelected) { const c = parseInt(k.split('-')[1], 10); if (!Number.isNaN(c)) set.add(c); }
-      const arr = Array.from(set.values()).sort((a,b)=>a-b);
-      if (arr.length) cols = [arr[0], arr[arr.length-1]];
-    } else if (this.activeCell) {
-      cols = [this.activeCell.c, this.activeCell.c];
-    }
-    const maxC = Math.max(0, (this.grid[0]?.length||1)-1);
-    if (!cols.length) return null;
-    const start = Math.max(0, Math.min(maxC, cols[0]));
-    const end = Math.max(0, Math.min(maxC, cols[1]));
-    return [Math.min(start,end), Math.max(start,end)];
-  }
+    const sheetId = selection.sheetId;
+    const row = selection.rowRange[0];
+    const column = selection.colRange[0];
 
-  private insertRowAt(index: number){
-    const cols = this.grid[0]?.length || 0;
-    index = Math.max(0, Math.min(this.grid.length, index));
-    this.grid.splice(index, 0, Array.from({ length: cols }, () => ''));
-    this.meta.splice(index, 0, Array.from({ length: cols }, () => null));
-    this.rowHeights.splice(index, 0, this.defaultRowHeight);
-    this.recomputeRowOffsets();
-    this.sheet!.data = this.packData();
-    this.queueSave();
-  }
-  private insertColAt(index: number){
-    const rows = this.grid.length;
-    const maxC = this.grid[0]?.length || 0;
-    index = Math.max(0, Math.min(maxC, index));
-    for (let r = 0; r < rows; r++) { this.grid[r].splice(index, 0, ''); (this.meta[r] ||= []).splice(index, 0, null); }
-    this.colWidths.splice(index, 0, this.defaultColWidth);
-    this.sheet!.data = this.packData();
-    this.queueSave();
-  }
-
-  // Column resizing
-  resizingCol: { index: number, startX: number, startW: number } | null = null;
-  resizingRow: { index: number, startY: number, startH: number } | null = null;
-  startColResize(ci: number, e: MouseEvent) {
-    e.preventDefault(); e.stopPropagation();
-    this.resizingCol = { index: ci, startX: e.clientX, startW: this.colWidths[ci] };
-  }
-  startRowResize(ri: number, e: MouseEvent) {
-    e.preventDefault(); e.stopPropagation();
-    this.resizingRow = { index: ri, startY: e.clientY, startH: this.rowHeights[ri] };
-  }
-  autoSizeCol(ci: number){
-    const header = this.colLabel(ci);
-    let maxContentWidth = this.measureText(header);
-    let hasContent = false;
-    for (let r = 0; r < this.grid.length; r++) {
-      const val = (this.grid[r]?.[ci] ?? '').toString();
-      if (val.trim().length > 0) hasContent = true;
-      const w = this.measureText(val);
-      if (w > maxContentWidth) maxContentWidth = w;
-    }
-    const minW = 40; const defaultW = this.defaultColWidth;
-    const target = hasContent ? Math.max(minW, maxContentWidth) : defaultW;
-    this.colWidths[ci] = target;
-    this.queueSave();
-  }
-  autoSizeRow(ri: number){
-    let maxH = 0; let hasContent = false;
-    for (let c = 0; c < (this.grid[ri]?.length||0); c++) {
-      const val = (this.grid[ri]?.[c] ?? '').toString();
-      if (val.trim().length > 0) hasContent = true;
-      const h = this.measureTextHeight(val);
-      if (h > maxH) maxH = h;
-    }
-    const defaultH = this.defaultRowHeight;
-    const target = hasContent ? Math.max(20, maxH) : defaultH;
-    this.rowHeights[ri] = target;
-    this.recomputeRowOffsets();
-    this.updateViewport();
-    this.queueSave();
-  }
-  onGlobalMouseMove(e: MouseEvent) {
-    if (this.resizingCol) {
-      const dx = e.clientX - this.resizingCol.startX;
-      const w = Math.max(40, this.resizingCol.startW + dx);
-      this.colWidths[this.resizingCol.index] = w;
-    }
-    if (this.resizingRow) {
-      const dy = e.clientY - this.resizingRow.startY;
-      const h = Math.max(20, this.resizingRow.startH + dy);
-      this.rowHeights[this.resizingRow.index] = h;
-      this.recomputeRowOffsets();
-      this.updateViewport();
-    }
-  }
-  endResizing() { if (this.resizingCol || this.resizingRow) { this.resizingCol = null; this.resizingRow = null; this.queueSave(); } }
-  onMouseLeaveEditor() { this.dragging = false; }
-
-  // Focus/scroll helpers
-  private moveFocus(r: number, c: number) {
-    r = Math.max(0, Math.min(this.grid.length - 1, r));
-    c = Math.max(0, Math.min((this.grid[0]?.length || 1) - 1, c));
-    this.activeCell = { r, c };
-    this.ensureCellVisible(r, c);
-    setTimeout(() => {
-      const el = document.querySelector<HTMLInputElement>(`input[data-rc="${r}-${c}"]`);
-      el?.focus();
-      if (el) { const len = el.value?.length ?? 0; try { el.setSelectionRange(len, len); } catch { /* ignore */ } }
-    }, 0);
-  }
-  private ensureCellVisible(r: number, c: number) {
-    const pane = this.editorMainPane?.nativeElement; if (!pane) return;
-    // Vertical visibility
-    const totalTop = this.rowOffsets[r] || 0; const h = this.rowHeights[r] || this.defaultRowHeight;
-    const vTop = pane.scrollTop; const vBottom = vTop + pane.clientHeight;
-    if (totalTop < vTop) pane.scrollTop = totalTop; else if ((totalTop + h) > vBottom) pane.scrollTop = totalTop + h - pane.clientHeight;
-    // Horizontal visibility (approximate)
-    let left = 40; // row header width
-    for (let i = 0; i < c; i++) left += this.colWidths[i] || this.defaultColWidth;
-    const cw = this.colWidths[c] || this.defaultColWidth;
-    const hLeft = pane.scrollLeft; const hRight = hLeft + pane.clientWidth;
-    if (left < hLeft) pane.scrollLeft = left; else if ((left + cw) > hRight) pane.scrollLeft = (left + cw) - pane.clientWidth;
-    this.updateViewport();
-  }
-
-  // Persist sizes with data when saving
-  private packData(){
-    // sync current active references back into sheets
-    this.tabs[this.activeTabIndex] = { name: this.tabs[this.activeTabIndex]?.name || `Sheet${this.activeTabIndex+1}`, grid: this.grid, colWidths: this.colWidths, rowHeights: this.rowHeights, meta: this.meta };
-    return { sheets: this.tabs, activeSheetIndex: this.activeTabIndex };
-  }
-
-  private makeSheet(name: string, grid: string[][]): SheetData {
-    const colWidths = Array.from({ length: grid[0]?.length || 0 }, () => this.defaultColWidth);
-    const rowHeights = Array.from({ length: grid.length }, () => this.defaultRowHeight);
-    const meta = Array.from({ length: grid.length }, () => Array.from({ length: grid[0]?.length || 0 }, () => null));
-    return { name, color: undefined, grid, colWidths, rowHeights, meta };
-  }
-  setActiveSheet(i: number){ if (i<0 || i>=this.tabs.length) return; this.activeTabIndex = i; this.applyActiveSheet(); this.updateViewport(); this.queueSave(); }
-  private applyActiveSheet(){ const s = this.tabs[this.activeTabIndex]; this.grid = s.grid; this.colWidths = s.colWidths; this.rowHeights = s.rowHeights; this.meta = s.meta; this.recomputeRowOffsets(); }
-  addSheet(){ const n = this.tabs.length+1; const s = this.makeSheet(`Sheet${n}`, defaultGrid(1000,26)); this.tabs.push(s); this.setActiveSheet(this.tabs.length-1); }
-  // Inline tab rename
-  renamingTabIndex: number | null = null;
-  renamingTabName = '';
-  startRenameSheet(i: number){ this.renamingTabIndex = i; this.renamingTabName = this.tabs[i]?.name || `Sheet${i+1}`; setTimeout(()=>{ const el=document.querySelector<HTMLInputElement>(`input[data-tab-input="${i}"]`); el?.focus(); el?.select(); },0); }
-  renameSheet(i: number){ this.startRenameSheet(i); }
-  commitRenameSheet(){ if (this.renamingTabIndex==null) return; const i=this.renamingTabIndex; const cur=this.tabs[i]?.name||`Sheet${i+1}`; const next=(this.renamingTabName||'').trim(); this.tabs[i].name = next || cur; this.renamingTabIndex=null; this.renamingTabName=''; this.queueSave(); }
-  cancelRenameSheet(){ this.renamingTabIndex=null; this.renamingTabName=''; }
-  deleteSheet(i: number){ if (this.tabs.length<=1) return; this.tabs.splice(i,1); if (this.activeTabIndex>=this.tabs.length) this.activeTabIndex=this.tabs.length-1; this.applyActiveSheet(); this.queueSave(); }
-  duplicateSheet(i: number){ const s = this.tabs[i]; const copy: SheetData = { name: s.name + ' (Copy)', color: s.color, grid: s.grid.map(row=>row.slice()), colWidths: s.colWidths.slice(), rowHeights: s.rowHeights.slice(), meta: s.meta.map(r=>r.map(c=> c ? { ...c } : null)) }; this.tabs.splice(i+1, 0, copy); this.setActiveSheet(i+1); }
-
-  // Tab drag & drop reorder
-  private dragTabIndex: number | null = null;
-  onTabDragStart(ev: DragEvent, i: number){ this.dragTabIndex = i; ev.dataTransfer?.setData('text/plain', String(i)); ev.dataTransfer!.effectAllowed = 'move'; }
-  onTabDragOver(ev: DragEvent, _i: number){ ev.preventDefault(); ev.dataTransfer!.dropEffect = 'move'; }
-  onTabDrop(ev: DragEvent, i: number){ ev.preventDefault(); const from = this.dragTabIndex ?? parseInt(ev.dataTransfer?.getData('text/plain')||'-1',10); if (Number.isNaN(from) || from<0 || from>=this.tabs.length) { this.dragTabIndex=null; return; } if (from===i) { this.dragTabIndex=null; return; } const [moved]=this.tabs.splice(from,1); this.tabs.splice(i,0,moved); this.dragTabIndex=null; const newActive = this.tabs.indexOf(moved); this.setActiveSheet(newActive); }
-
-  // Keyboard navigation between tabs
-  onGlobalKeyDown(e: KeyboardEvent){
-    if (!(e.ctrlKey || (e as any).metaKey)) return;
-    if (e.key === 'PageDown' || e.key === 'PageUp'){
-      e.preventDefault();
-      const len = this.tabs.length; if (!len) return;
-      let idx = this.activeTabIndex + (e.key === 'PageDown' ? 1 : -1);
-      if (idx < 0) idx = len - 1; if (idx >= len) idx = 0;
-      this.setActiveSheet(idx);
-    }
-  }
-
-  // Delete confirmation
-  confirmDeleteOpen = false; deleteIndex: number | null = null; deleteName = ''; deleteNonEmpty = false;
-  openDeleteConfirm(i: number){ const s=this.tabs[i]; if (!s) return; const nonEmpty = this.isSheetNonEmpty(s); if (!nonEmpty) { this.deleteSheet(i); return; } this.deleteIndex=i; this.deleteName=s.name; this.deleteNonEmpty=true; this.confirmDeleteOpen=true; }
-  cancelDelete(){ this.confirmDeleteOpen=false; this.deleteIndex=null; this.deleteName=''; this.deleteNonEmpty=false; }
-  confirmDelete(){ if (this.deleteIndex==null) return; this.deleteSheet(this.deleteIndex); this.cancelDelete(); }
-  private isSheetNonEmpty(s: SheetData): boolean { for (let r=0; r<s.grid.length; r++){ const row=s.grid[r]; for (let c=0; c<row.length; c++){ if ((row[c]||'').length>0) return true; } } return false; }
-
-  // Measure helpers
-  private measureCtx?: CanvasRenderingContext2D;
-  private ensureMeasureCtx() {
-    if (this.measureCtx) return this.measureCtx;
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d')!;
-    // Try to pick up the font from a cell input if present
-    let font = '';
-    const el = document.querySelector('input[data-rc]') as HTMLInputElement | null;
-    if (el) {
-      const cs = getComputedStyle(el);
-      font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`.trim();
-    } else {
-      font = 'normal 14px system-ui, Arial, sans-serif';
-    }
-    ctx.font = font;
-    this.measureCtx = ctx; return ctx;
-  }
-  private measureText(text: string): number {
-    const ctx = this.ensureMeasureCtx();
-    // padding left+right (~16px) + a little buffer
-    const base = ctx.measureText(String(text)).width;
-    return Math.ceil(base + 20);
-  }
-  private measureTextHeight(text: string): number {
-    // Approximate height based on line count and line-height from an input
-    const ref = document.querySelector('input[data-rc]') as HTMLInputElement | null;
-    const cs = ref ? getComputedStyle(ref) : null;
-    const lineH = cs ? parseFloat(cs.lineHeight || '20') : 20;
-    const paddingY = cs ? (parseFloat(cs.paddingTop||'4') + parseFloat(cs.paddingBottom||'4')) : 8;
-    const lines = String(text).split(/\r?\n/).length;
-    return Math.ceil(lines * lineH + paddingY);
-  }
-
-  // Formatting helpers for template
-  cellAlign(r: number, c: number): 'left'|'center'|'right' { return (this.meta[r]?.[c]?.align as any) || 'left'; }
-  cellInputType(r: number, c: number): 'text'|'number'|'date' { return (this.meta[r]?.[c]?.format as any) || 'text'; }
-  formatDisplay(r: number, c: number, raw: any): string {
-    const meta = this.meta[r]?.[c] || {} as any;
-    const val = String(raw ?? '');
-    if (!val) return '';
-    if (meta.format === 'number'){
-      const num = Number(val.replace(/,/g,'')); if (Number.isNaN(num)) return val;
-      switch(meta.numberPreset){
-        case 'num0': return Math.round(num).toLocaleString();
-        case 'currencyUSD': return num.toLocaleString(undefined, { style: 'currency', currency: 'USD' });
-        case 'percent': return (num*100).toLocaleString(undefined, { maximumFractionDigits: 2 }) + '%';
-        case 'num2': default: return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const updatedSheets = workbook.sheets.map(sheet => {
+      if (sheet.id !== sheetId) {
+        return sheet;
       }
-    }
-    if (meta.format === 'date'){
-      const d = new Date(val); if (isNaN(d.getTime())) return val;
-      const yyyy = d.getFullYear(); const mm = String(d.getMonth()+1).padStart(2,'0'); const dd = String(d.getDate()).padStart(2,'0');
-      if (meta.datePreset === 'dateMDY') return `${mm}/${dd}/${yyyy}`;
-      return `${yyyy}-${mm}-${dd}`;
-    }
-    return val;
-  }
-
-  // Fill handle state
-  draggingFill = false;
-  fillPreviewRect: { x:number,y:number,w:number,h:number } | null = null;
-  private fillFrom: { r1:number,c1:number,r2:number,c2:number } | null = null;
-  startFillDrag(e: MouseEvent){ e.preventDefault(); e.stopPropagation(); if (!this.selectionRect || !(this.rangeStart||this.activeCell)) return; const rs = this.rangeStart || this.activeCell!; const re = this.rangeEnd || this.activeCell!; this.fillFrom = { r1: Math.min(rs.r, re.r), c1: Math.min(rs.c, re.c), r2: Math.max(rs.r, re.r), c2: Math.max(rs.c, re.c) }; this.draggingFill = true; }
-  private updateFillPreview(e: MouseEvent){ if (!this.draggingFill || !this.fillFrom) return; const pane = this.editorMainPane?.nativeElement; if (!pane) return; const pr = pane.getBoundingClientRect(); const relX = pane.scrollLeft + (e.clientX - pr.left) - 40; const relY = pane.scrollTop + (e.clientY - pr.top) - (this.headerHeight||28); const tr = this.findRowAtOffset(Math.max(0, relY)); const tc = this.findColAtOffset(Math.max(0, relX)); const r1 = Math.min(this.fillFrom.r1, tr); const r2 = Math.max(this.fillFrom.r2, tr); const c1 = Math.min(this.fillFrom.c1, tc); const c2 = Math.max(this.fillFrom.c2, tc); const a = document.querySelector<HTMLInputElement>(`input[data-rc="${r1}-${c1}"]`); const b=document.querySelector<HTMLInputElement>(`input[data-rc=\"${r2}-${c2}\"]`); const paneRect = pr; if (a && b){ const ar=a.getBoundingClientRect(); const br=b.getBoundingClientRect(); this.fillPreviewRect={ x:(ar.left-paneRect.left)+pane.scrollLeft-1, y:(ar.top-paneRect.top)+pane.scrollTop-1, w:(br.right-ar.left)+2, h:(br.bottom-ar.top)+2 }; } }
-  private applyFill(e: MouseEvent){ if (!this.fillFrom) return; const pane=this.editorMainPane?.nativeElement; if (!pane) return; const pr=pane.getBoundingClientRect(); const relX = pane.scrollLeft + (e.clientX - pr.left) - 40; const relY = pane.scrollTop + (e.clientY - pr.top) - (this.headerHeight||28); const tr = this.findRowAtOffset(Math.max(0, relY)); const tc = this.findColAtOffset(Math.max(0, relX)); const src = this.fillFrom; const dr1 = Math.min(src.r1, tr), dr2 = Math.max(src.r2, tr), dc1 = Math.min(src.c1, tc), dc2 = Math.max(src.c2, tc); this.performFill(src, { r1:dr1,c1:dc1,r2:dr2,c2:dc2 }); this.draggingFill=false; this.fillFrom=null; this.fillPreviewRect=null; this.queueSave(); }
-  private performFill(src: {r1:number,c1:number,r2:number,c2:number}, dst: {r1:number,c1:number,r2:number,c2:number}){
-    // Determine expanded area outside src to fill
-    const top = Math.min(dst.r1, src.r1), left = Math.min(dst.c1, src.c1), bottom = Math.max(dst.r2, src.r2), right = Math.max(dst.c2, src.c2);
-    const fillTop = top < src.r1 ? top : src.r2+1;
-    const fillBottom = bottom > src.r2 ? bottom : src.r1-1;
-    const fillLeft = left < src.c1 ? left : src.c2+1;
-    const fillRight = right > src.c2 ? right : src.c1-1;
-    const sh = src.r2 - src.r1 + 1, sw = src.c2 - src.c1 + 1;
-    const isSingle = sh===1 && sw===1;
-    const srcVal = this.grid[src.r1][src.c1];
-    const incType = isSingle ? this.detectIncrementType(srcVal) : 'none';
-    for (let r=top; r<=bottom; r++){
-      for (let c=left; c<=right; c++){
-        const inSrc = r>=src.r1 && r<=src.r2 && c>=src.c1 && c<=src.c2;
-        if (inSrc) continue; // skip original
-        const inFill = (r>=fillTop && r<=fillBottom && c>=src.c1 && c<=src.c2) || (c>=fillLeft && c<=fillRight && r>=src.r1 && r<=src.r2);
-        if (!inFill) continue;
-        if (incType!=='none') {
-          // Increment along the axis of expansion
-          const dr = r - src.r1; const dc = c - src.c1;
-          const step = (r>src.r2 || c>src.c2) ? 1 : -1;
-          this.grid[r][c] = this.incrementValue(srcVal, (dr+dc)*step, incType);
-        } else {
-          // Pattern copy
-          const sr = src.r1 + ((r - top) % sh + sh) % sh;
-          const sc = src.c1 + ((c - left) % sw + sw) % sw;
-          this.grid[r][c] = this.grid[sr][sc];
-        }
+      const cells = [...(sheet.celldata ?? [])];
+      const index = cells.findIndex(cell => cell.r === row && cell.c === column);
+      const currentCell = index >= 0 ? { ...cells[index] } : undefined;
+      if (index >= 0) {
+        cells.splice(index, 1);
       }
-    }
-    this.sheet!.data = this.packData();
-  }
-  private detectIncrementType(val: string): 'number'|'letter'|'date'|'none' {
-    if (/^-?\d+(?:\.\d+)?$/.test(val)) return 'number';
-    if (/^[A-Za-z]$/.test(val)) return 'letter';
-    const d = new Date(val); if (!isNaN(d.getTime())) return 'date';
-    return 'none';
-  }
-  private incrementValue(val: string, steps: number, type: 'number'|'letter'|'date'): string {
-    if (type==='number'){ const n = parseFloat(val); const out = n + steps; return String(out); }
-    if (type==='letter'){ const code = val.charCodeAt(0); const base = code>=97?97:65; const offset = (code - base + steps) % 26; return String.fromCharCode(base + (offset<0?offset+26:offset)); }
-    if (type==='date'){ const d = new Date(val); d.setDate(d.getDate()+steps); const yyyy=d.getFullYear(); const mm=String(d.getMonth()+1).padStart(2,'0'); const dd=String(d.getDate()).padStart(2,'0'); return `${yyyy}-${mm}-${dd}`; }
-    return val;
-  }
-
-  // Context menu
-  contextOpen = false;
-  contextX = 0; contextY = 0;
-  contextTarget: { type: 'cell'|'row'|'col'|'tab', r?: number, c?: number, tabIndex?: number } | null = null;
-  contextItems: { divider?: boolean, label?: string, key?: string, children?: { label: string, key: string }[] }[] = [];
-  submenu: { x: number, y: number, items: { label: string, key: string }[] } | null = null;
-
-  openContext(e: MouseEvent, type: 'cell'|'row'|'col'|'tab', r?: number, c?: number, tabIndex?: number){
-    e.preventDefault();
-    this.contextTarget = { type, r, c, tabIndex } as any;
-    // Update selection to reflect context target for clarity
-    if (type === 'row' && typeof r === 'number') this.selectRow(r);
-    if (type === 'col' && typeof c === 'number') this.selectColumn(c);
-    if (type === 'cell' && typeof r === 'number' && typeof c === 'number'){
-      this.activeCell = { r, c }; this.rangeStart = { r, c }; this.rangeEnd = { r, c };
-    }
-    this.buildContextItems();
-    const { w: menuW, h: menuH } = this.measureMenu(this.contextItems);
-    const vw = window.innerWidth, vh = window.innerHeight;
-    let x = e.clientX, y = e.clientY;
-    if (x + menuW > vw) x = Math.max(8, vw - menuW - 8);
-    if (y + menuH > vh) y = Math.max(8, vh - menuH - 8);
-    this.contextX = x; this.contextY = y; this.contextOpen = true; this.submenu=null;
-  }
-  closeContext(){ this.contextOpen = false; this.contextItems = []; this.contextTarget = null; }
-  private buildContextItems(){
-    const items: { divider?: boolean, label?: string, key?: string, children?: { label: string, key: string }[] }[] = [];
-    if (!this.contextTarget) { this.contextItems = []; return; }
-    const t = this.contextTarget.type;
-    if (t === 'tab'){
-      items.push({ label: 'Rename', key: 'tabRename' });
-      items.push({ label: 'Duplicate', key: 'tabDuplicate' });
-      items.push({ label: 'Delete', key: 'tabDelete' });
-      items.push({ divider: true });
-      items.push({ label: 'Move left', key: 'tabMoveLeft' });
-      items.push({ label: 'Move right', key: 'tabMoveRight' });
-      items.push({ divider: true });
-      items.push({ label: 'Tab color', key: 'tabColorSub', children: [
-        { label: 'Blue', key: 'tabColor:#3b82f6' },
-        { label: 'Green', key: 'tabColor:#10b981' },
-        { label: 'Purple', key: 'tabColor:#8b5cf6' },
-        { label: 'Orange', key: 'tabColor:#f59e0b' },
-        { label: 'Red', key: 'tabColor:#ef4444' },
-        { label: 'Gray', key: 'tabColor:#6b7280' },
-        { label: 'None', key: 'tabColor:' }
-      ]});
-      this.contextItems = items; return;
-    }
-    if (t === 'cell' || t === 'row'){
-      items.push({ label: 'Insert row above', key: 'insertRowAbove' });
-      items.push({ label: 'Insert row below', key: 'insertRowBelow' });
-      items.push({ label: 'Delete row(s)', key: 'deleteRows' });
-      items.push({ label: 'Duplicate row', key: 'dupRow' });
-      if (t === 'row'){
-        items.push({ divider: true });
-        items.push({ label: 'Row: Format as text', key: 'rowFmtText' });
-        items.push({ label: 'Row: Format as number', key: 'rowFmtNumber' });
-        items.push({ label: 'Row: Format as date', key: 'rowFmtDate' });
-        items.push({ divider: true });
-        items.push({ label: 'Row: Align left', key: 'rowAlignLeft' });
-        items.push({ label: 'Row: Align center', key: 'rowAlignCenter' });
-        items.push({ label: 'Row: Align right', key: 'rowAlignRight' });
+      const nextCell = mutator(currentCell, row, column);
+      if (nextCell) {
+        cells.push(nextCell);
+        cells.sort((a, b) => (a.r - b.r) || (a.c - b.c));
       }
-    }
-    if (t === 'cell' || t === 'col'){
-      items.push({ label: 'Insert column left', key: 'insertColLeft' });
-      items.push({ label: 'Insert column right', key: 'insertColRight' });
-      items.push({ label: 'Delete column(s)', key: 'deleteCols' });
-      items.push({ label: 'Duplicate column', key: 'dupCol' });
-      if (t === 'col'){
-        items.push({ divider: true });
-        items.push({ label: 'Column: Format as text', key: 'colFmtText' });
-        items.push({ label: 'Column: Format as number', key: 'colFmtNumber' });
-        items.push({ label: 'Column: Format as date', key: 'colFmtDate' });
-        items.push({ divider: true });
-        items.push({ label: 'Column: Align left', key: 'colAlignLeft' });
-        items.push({ label: 'Column: Align center', key: 'colAlignCenter' });
-        items.push({ label: 'Column: Align right', key: 'colAlignRight' });
-      }
-    }
-    if (t === 'cell'){
-      items.push({ divider: true });
-      items.push({ label: 'Format as text', key: 'fmtText' });
-      items.push({ label: 'Format as number', key: 'fmtNumber' });
-      items.push({ label: 'Format as date', key: 'fmtDate' });
-      items.push({ label: 'Number format', key: 'numSub', children: [
-        { label: '0 decimals', key: 'num0' },
-        { label: '2 decimals', key: 'num2' },
-        { label: 'Currency (USD)', key: 'currencyUSD' },
-        { label: 'Percent', key: 'percent' },
-      ]});
-      items.push({ label: 'Date format', key: 'dateSub', children: [
-        { label: 'YYYY-MM-DD', key: 'dateISO' },
-        { label: 'MM/DD/YYYY', key: 'dateMDY' },
-      ]});
-      items.push({ divider: true });
-      items.push({ label: 'Align left', key: 'alignLeft' });
-      items.push({ label: 'Align center', key: 'alignCenter' });
-      items.push({ label: 'Align right', key: 'alignRight' });
-    }
-    this.contextItems = items;
-  }
-  openSubmenu(item: any, ev: MouseEvent){
-    if (!item || !item.children) { this.submenu=null; return; }
-    const parent = (ev.target as HTMLElement).closest('button') as HTMLElement; if (!parent) return;
-    const pr = parent.getBoundingClientRect();
-    const vw = window.innerWidth, vh = window.innerHeight;
-    const { w: subW, h: subH } = this.measureMenu(item.children);
-    // Preferred to the right
-    let relX = (pr.right) - this.contextX + 8;
-    // If offscreen to the right, open to the left
-    if (this.contextX + relX + subW > vw - 8) {
-      relX = (pr.left) - this.contextX - subW - 8;
-    }
-    let relY = (pr.top) - this.contextY;
-    // Clamp vertically
-    if (this.contextY + relY + subH > vh - 8) relY = Math.max(0, vh - subH - this.contextY - 8);
-    this.submenu = { x: relX, y: relY, items: item.children };
-  }
-  maybeCloseSubmenu(_e: MouseEvent){ /* keep submenu open while moving into it */ }
+      return {
+        ...sheet,
+        celldata: cells,
+        updatedAt: new Date().toISOString()
+      };
+    });
 
-  private measureMenu(items: { divider?: boolean, label?: string, key?: string, children?: any[] }[]): { w: number, h: number } {
-    const w = 240;
-    const h = items.reduce((acc, it) => acc + (it.divider ? 8 : 28), 6);
-    return { w, h };
-  }
-  onContextAction(item: { divider?: boolean, label?: string, key?: string }){
-    const t = this.contextTarget;
-    if (!t) return;
-    if (t.type === 'tab'){
-      const idx = t.tabIndex ?? this.activeTabIndex;
-      switch(item.key){
-        case 'tabRename': this.renameSheet(idx); break;
-        case 'tabDuplicate': this.duplicateSheet(idx); break;
-        case 'tabDelete': this.openDeleteConfirm(idx); break;
-        case 'tabMoveLeft': if (idx>0){ const [s]=this.tabs.splice(idx,1); this.tabs.splice(idx-1,0,s); this.setActiveSheet(idx-1); } break;
-        case 'tabMoveRight': if (idx<this.tabs.length-1){ const [s]=this.tabs.splice(idx,1); this.tabs.splice(idx+1,0,s); this.setActiveSheet(idx+1); } break;
-        default:
-          if (item.key?.startsWith('tabColor:')){ const color = item.key.split(':')[1] || undefined; this.tabs[idx].color = color; this.queueSave(); }
-          break;
-      }
-      this.closeContext(); return;
-    }
-    const rowIndexFor = (pos: 'above'|'below') => {
-      if (t.r != null) return pos==='above'? t.r : t.r+1;
-      const b = this.getSelectedRowBounds(); if (!b) return pos==='above'? 0 : this.grid.length;
-      return pos==='above'? b[0] : b[1]+1;
+    const updatedWorkbook: Workbook = {
+      ...workbook,
+      sheets: updatedSheets,
+      updatedAt: new Date().toISOString()
     };
-    const colIndexFor = (pos: 'left'|'right') => {
-      if (t.c != null) return pos==='left'? t.c : t.c+1;
-      const b = this.getSelectedColBounds(); if (!b) return pos==='left'? 0 : (this.grid[0]?.length||0);
-      return pos==='left'? b[0] : b[1]+1;
-    };
-    switch(item.key){
-      case 'insertRowAbove': this.insertRowAt(rowIndexFor('above')); break;
-      case 'insertRowBelow': this.insertRowAt(rowIndexFor('below')); break;
-      case 'insertColLeft': this.insertColAt(colIndexFor('left')); break;
-      case 'insertColRight': this.insertColAt(colIndexFor('right')); break;
-      case 'deleteRows': this.deleteSelectedRows(); break;
-      case 'deleteCols': this.deleteSelectedCols(); break;
-      case 'rowFmtText': if (t.r!=null) this.applyFormatToRow(t.r,'text'); break;
-      case 'rowFmtNumber': if (t.r!=null) this.applyFormatToRow(t.r,'number'); break;
-      case 'rowFmtDate': if (t.r!=null) this.applyFormatToRow(t.r,'date'); break;
-      case 'rowAlignLeft': if (t.r!=null) this.applyAlignToRow(t.r,'left'); break;
-      case 'rowAlignCenter': if (t.r!=null) this.applyAlignToRow(t.r,'center'); break;
-      case 'rowAlignRight': if (t.r!=null) this.applyAlignToRow(t.r,'right'); break;
-      case 'colFmtText': if (t.c!=null) this.applyFormatToCol(t.c,'text'); break;
-      case 'colFmtNumber': if (t.c!=null) this.applyFormatToCol(t.c,'number'); break;
-      case 'colFmtDate': if (t.c!=null) this.applyFormatToCol(t.c,'date'); break;
-      case 'colAlignLeft': if (t.c!=null) this.applyAlignToCol(t.c,'left'); break;
-      case 'colAlignCenter': if (t.c!=null) this.applyAlignToCol(t.c,'center'); break;
-      case 'colAlignRight': if (t.c!=null) this.applyAlignToCol(t.c,'right'); break;
-      case 'dupRow': {
-        const target = (t.r != null) ? t.r : (this.getSelectedRowBounds()?.[0] ?? 0);
-        const src = this.grid[target]; if (!src) break;
-        const copy = src.slice(); this.grid.splice(target+1, 0, copy);
-        // Duplicate meta row
-        const msrc = this.meta[target] || Array.from({ length: this.grid[0]?.length||0 }, () => null);
-        this.meta.splice(target+1, 0, msrc.map(x => x ? { ...x } : null));
-        this.rowHeights.splice(target+1, 0, this.rowHeights[target]||this.defaultRowHeight);
-        this.recomputeRowOffsets(); this.sheet!.data = this.packData(); this.queueSave();
-        break;
-      }
-      case 'dupCol': {
-        const target = (t.c != null) ? t.c : (this.getSelectedColBounds()?.[0] ?? 0);
-        for (let r=0; r<this.grid.length; r++){
-          const val = this.grid[r]?.[target] ?? '';
-          this.grid[r].splice(target+1, 0, val);
-          const m = (this.meta[r] ||= []); const mv = m[target] || null; m.splice(target+1, 0, mv ? { ...mv } : null);
-        }
-        this.colWidths.splice(target+1, 0, this.colWidths[target]||this.defaultColWidth);
-        this.sheet!.data = this.packData(); this.queueSave();
-        break;
-      }
-      case 'fmtDate': this.applyFormatToSelection('date'); break;
-      case 'fmtNumber': this.applyFormatToSelection('number'); break;
-      case 'fmtText': this.applyFormatToSelection('text'); break;
-      case 'num0': this.applyNumberPresetToSelection('num0'); break;
-      case 'num2': this.applyNumberPresetToSelection('num2'); break;
-      case 'currencyUSD': this.applyNumberPresetToSelection('currencyUSD'); break;
-      case 'percent': this.applyNumberPresetToSelection('percent'); break;
-      case 'dateISO': this.applyDatePresetToSelection('dateISO'); break;
-      case 'dateMDY': this.applyDatePresetToSelection('dateMDY'); break;
-      case 'alignLeft': this.applyAlignToSelection('left'); break;
-      case 'alignCenter': this.applyAlignToSelection('center'); break;
-      case 'alignRight': this.applyAlignToSelection('right'); break;
-      default: break;
-    }
-    this.closeContext();
+
+    this.workbook.set(updatedWorkbook);
+    doc.data = updatedWorkbook;
+    doc.updatedAt = updatedWorkbook.updatedAt;
+    this.sheetDoc.set({ ...doc });
+    this.syncFormulaBuffer(updatedWorkbook, selection);
+    this.queueSave();
   }
 
-  private applyAlignToSelection(align: 'left'|'center'|'right'){
-    this.forEachSelectedCell((r,c) => { const m = (this.meta[r] ||= []); m[c] = { ...(m[c]||{}), align }; });
-    this.sheet!.data = this.packData(); this.queueSave();
+  private sanitizeFormat(source: CellFormat): CellFormat | undefined {
+    const cleaned: CellFormat = {};
+    if (source.bold) {
+      cleaned.bold = true;
+    }
+    if (source.italic) {
+      cleaned.italic = true;
+    }
+    if (source.numberFormat && source.numberFormat !== 'plain') {
+      cleaned.numberFormat = source.numberFormat;
+    }
+    return Object.keys(cleaned).length > 0 ? cleaned : undefined;
   }
-  private applyFormatToSelection(format: 'text'|'number'|'date'){
-    this.forEachSelectedCell((r,c) => { const m = (this.meta[r] ||= []); m[c] = { ...(m[c]||{}), format }; });
-    this.sheet!.data = this.packData(); this.queueSave();
+
+  private cellHasValue(cell: WorkbookCell | undefined): boolean {
+    if (!cell) {
+      return false;
+    }
+    const value = cell.v;
+    if (value == null) {
+      return false;
+    }
+    if (typeof value === 'object') {
+      if (value.v != null && value.v !== '') {
+        return true;
+      }
+      if (value.m != null && value.m !== '') {
+        return true;
+      }
+      if (value.f != null && value.f !== '') {
+        return true;
+      }
+      return false;
+    }
+    return value !== '';
   }
-  private applyNumberPresetToSelection(preset: 'num0'|'num2'|'currencyUSD'|'percent'){
-    this.forEachSelectedCell((r,c) => { const m = (this.meta[r] ||= []); m[c] = { ...(m[c]||{}), format: 'number', numberPreset: preset }; });
-    this.sheet!.data = this.packData(); this.queueSave();
-  }
-  private applyDatePresetToSelection(preset: 'dateISO'|'dateMDY'){
-    this.forEachSelectedCell((r,c) => { const m = (this.meta[r] ||= []); m[c] = { ...(m[c]||{}), format: 'date', datePreset: preset }; });
-    this.sheet!.data = this.packData(); this.queueSave();
-  }
-  private forEachSelectedCell(fn: (r:number,c:number)=>void){
-    if (this.rangeStart && this.rangeEnd){
-      const r1 = Math.min(this.rangeStart.r, this.rangeEnd.r);
-      const r2 = Math.max(this.rangeStart.r, this.rangeEnd.r);
-      const c1 = Math.min(this.rangeStart.c, this.rangeEnd.c);
-      const c2 = Math.max(this.rangeStart.c, this.rangeEnd.c);
-      for (let r=r1; r<=r2; r++) for (let c=c1; c<=c2; c++) fn(r,c);
+
+  private async exportWorkbook(format: 'xlsx' | 'csv') {
+    const workbook = this.workbook();
+    if (!workbook) {
       return;
     }
-    if (this.multiSelected.size){
-      for (const k of this.multiSelected){ const [rs, cs] = k.split('-').map(n=>parseInt(n,10)); if (!Number.isNaN(rs)&&!Number.isNaN(cs)) fn(rs,cs); }
+    if (format === 'csv') {
+      this.exportCsv(workbook);
       return;
     }
-    if (this.activeCell){ fn(this.activeCell.r, this.activeCell.c); }
-  }
-  private applyAlignToRow(ri: number, align: 'left'|'center'|'right'){ for (let c=0; c<(this.grid[ri]?.length||0); c++){ const m=(this.meta[ri] ||= []); m[c] = { ...(m[c]||{}), align }; } this.sheet!.data=this.packData(); this.queueSave(); }
-  private applyAlignToCol(ci: number, align: 'left'|'center'|'right'){ for (let r=0; r<this.grid.length; r++){ const m=(this.meta[r] ||= []); m[ci] = { ...(m[ci]||{}), align }; } this.sheet!.data=this.packData(); this.queueSave(); }
-  private applyFormatToRow(ri: number, format: 'text'|'number'|'date'){ for (let c=0; c<(this.grid[ri]?.length||0); c++){ const m=(this.meta[ri] ||= []); m[c] = { ...(m[c]||{}), format }; } this.sheet!.data=this.packData(); this.queueSave(); }
-  private applyFormatToCol(ci: number, format: 'text'|'number'|'date'){ for (let r=0; r<this.grid.length; r++){ const m=(this.meta[r] ||= []); m[ci] = { ...(m[ci]||{}), format }; } this.sheet!.data=this.packData(); this.queueSave(); }
-  private deleteSelectedRows(){
-    const b = this.getSelectedRowBounds(); if (!b) return;
-    const [start,end] = b; const count = end-start+1;
-    if (count<=0) return;
-    this.grid.splice(start, count);
-    this.rowHeights.splice(start, count);
-    this.meta.splice(start, count);
-    if (!this.grid.length){ this.grid = defaultGrid(); this.initSizing(); this.initMeta(); }
-    this.recomputeRowOffsets(); this.sheet!.data = this.packData(); this.queueSave();
-  }
-  private deleteSelectedCols(){
-    const b = this.getSelectedColBounds(); if (!b) return;
-    const [start,end] = b; const count = end-start+1;
-    if (count<=0) return;
-    for (let r=0; r<this.grid.length; r++){
-      this.grid[r].splice(start, count);
-      (this.meta[r] ||= []).splice(start, count);
+    const XLSX = await this.ensureXlsxRuntime();
+    if (!XLSX) {
+      this.saveError.set('Unable to load XLSX exporter');
+      return;
     }
-    this.colWidths.splice(start, count);
-    if (!(this.grid[0]?.length)){ this.grid = defaultGrid(); this.initSizing(); this.initMeta(); }
-    this.sheet!.data = this.packData(); this.queueSave();
+    const wb = XLSX.utils.book_new();
+    workbook.sheets.forEach(sheet => {
+      const data: any[][] = [];
+      sheet.celldata.forEach(cell => {
+        const row = data[cell.r] ?? (data[cell.r] = []);
+        row[cell.c] = this.extractCellValue(cell.v);
+      });
+      const ws = XLSX.utils.aoa_to_sheet(data);
+      XLSX.utils.book_append_sheet(wb, ws, sheet.name);
+    });
+    XLSX.writeFile(wb, `${workbook.title || 'Workbook'}.xlsx`);
+  }
+
+  private exportCsv(workbook: Workbook) {
+    const active = workbook.sheets.find(s => s.id === workbook.activeSheetId) ?? workbook.sheets[0];
+    if (!active) {
+      return;
+    }
+    const maxRow = active.celldata.reduce((max, cell) => Math.max(max, cell.r), 0);
+    const maxCol = active.celldata.reduce((max, cell) => Math.max(max, cell.c), 0);
+    const grid: string[][] = Array.from({ length: maxRow + 1 }, () =>
+      Array.from({ length: maxCol + 1 }, () => '')
+    );
+    active.celldata.forEach(cell => {
+      grid[cell.r][cell.c] = this.extractCellValue(cell.v) ?? '';
+    });
+    const csv = grid
+      .map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `${workbook.title || 'Workbook'}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+
+  private extractCellValue(source: any): any {
+    if (source == null) {
+      return '';
+    }
+    if (typeof source === 'object') {
+      if (Object.prototype.hasOwnProperty.call(source, 'v')) {
+        return source.v;
+      }
+      if (Object.prototype.hasOwnProperty.call(source, 'm')) {
+        return source.m;
+      }
+    }
+    return source;
+  }
+
+  private async ensureXlsxRuntime(): Promise<any> {
+    if (window.XLSX) {
+      return window.XLSX;
+    }
+    if (!this.xlsxLoader) {
+      this.xlsxLoader = new Promise((resolve, reject) => {
+        const src = '/vendor/xlsx/xlsx.full.min.js';
+        const selector = `script[data-xlsx-src="${src}"]`;
+        const existing = document.querySelector(selector);
+        const checkReady = () => {
+          if (window.XLSX) {
+            resolve(window.XLSX);
+          } else {
+            setTimeout(checkReady, 25);
+          }
+        };
+        if (existing) {
+          checkReady();
+          return;
+        }
+        const script = document.createElement('script');
+        script.type = 'text/javascript';
+        script.src = src;
+        script.async = true;
+        script.dataset['xlsxSrc'] = src;
+        script.onload = () => checkReady();
+        script.onerror = () => {
+          this.xlsxLoader = undefined;
+          reject(new Error('Failed to load XLSX runtime'));
+        };
+        document.body.appendChild(script);
+      });
+    }
+    return this.xlsxLoader;
   }
 }

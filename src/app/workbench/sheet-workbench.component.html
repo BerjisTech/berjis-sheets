@@ -1,0 +1,87 @@
+<div
+  class="sheet-workbench"
+  role="grid"
+  tabindex="0"
+  #gridContainer
+  (keydown)="onGridKeydown($event)"
+>
+  <div class="sheet-grid">
+    <div class="sheet-grid__header">
+      <div class="sheet-grid__corner"></div>
+      <div
+        class="sheet-grid__column-headers"
+        [style.transform]="'translateX(' + (-headerScrollLeft()) + 'px)'"
+        [style.gridTemplateColumns]="columnTemplate"
+      >
+        <div
+          class="sheet-grid__column-header"
+          *ngFor="let column of columnIndices; trackBy: trackByIndex; let colIndex = index"
+          [class.sheet-grid__column-header--active]="isColumnSelected(colIndex)"
+        >
+          {{ columnLabels[colIndex] }}
+        </div>
+      </div>
+    </div>
+
+    <div class="sheet-grid__body" #gridBody (scroll)="onGridScroll()">
+      <div
+        class="sheet-grid__row"
+        *ngFor="let row of rowIndices; trackBy: trackByIndex; let rowIndex = index"
+      >
+        <div
+          class="sheet-grid__row-header"
+          [class.sheet-grid__row-header--active]="isRowSelected(rowIndex)"
+        >
+          {{ rowIndex + 1 }}
+        </div>
+        <div class="sheet-grid__cells" [style.gridTemplateColumns]="columnTemplate">
+          <div
+            class="sheet-grid__cell"
+            [ngClass]="formatClasses(rowIndex, colIndex)"
+            *ngFor="let column of columnIndices; trackBy: trackByIndex; let colIndex = index"
+            [attr.data-row]="rowIndex"
+            [attr.data-col]="colIndex"
+            [class.sheet-grid__cell--active]="isCellSelected(rowIndex, colIndex)"
+            [class.sheet-grid__cell--editing]="editing() && isCellSelected(rowIndex, colIndex)"
+            [attr.title]="cellError(rowIndex, colIndex) ?? null"
+            (mousedown)="onCellPointer(rowIndex, colIndex, $event)"
+            (dblclick)="beginEdit()"
+          >
+            {{ getCellDisplay(rowIndex, colIndex) }}
+          </div>
+        </div>
+      </div>
+
+      <div
+        *ngIf="fillPreviewRect() as previewRect"
+        class="sheet-grid__fill-preview-outline"
+        [style.top.px]="previewRect.top"
+        [style.left.px]="previewRect.left"
+        [style.width.px]="previewRect.width"
+        [style.height.px]="previewRect.height"
+      ></div>
+      <div
+        *ngIf="!readOnly && fillHandleRect() as handle"
+        class="sheet-grid__fill-handle"
+        [style.top.px]="handle.top"
+        [style.left.px]="handle.left"
+        [style.width.px]="handle.width"
+        [style.height.px]="handle.height"
+        (pointerdown)="onFillHandlePointerDown($event)"
+      ></div>
+      <textarea
+        *ngIf="editing()"
+        #cellEditor
+        class="sheet-cell-editor"
+        [style.top.px]="editorRect().top"
+        [style.left.px]="editorRect().left"
+        [style.width.px]="editorRect().width"
+        [style.height.px]="editorRect().height"
+        [ngModel]="editorValue()"
+        (ngModelChange)="onEditorInput($event)"
+        (keydown)="onEditorKeydown($event)"
+        (blur)="commitEdit()"
+      ></textarea>
+    </div>
+  </div>
+</div>
