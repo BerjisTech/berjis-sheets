@@ -60,6 +60,11 @@ export class SheetPageComponent implements OnInit, OnDestroy {
     { name: 'Data', actions: ['settings'] as MenuAction[] },
     { name: 'Collaborate', actions: ['share', 'history'] as MenuAction[] }
   ];
+  // Share modal state
+  shareOpen = signal(false);
+  shareRows = signal<{ userId: string; role: 'viewer'|'commenter'|'editor' }[]>([]);
+  shareUserId = signal('');
+  shareRole = signal<'viewer'|'commenter'|'editor'>('viewer');
   private readonly actionLabels: Record<MenuAction, string> = {
     new: 'New',
     open: 'Open',
@@ -93,6 +98,32 @@ export class SheetPageComponent implements OnInit, OnDestroy {
 
   onFormulaInput(value: string): void {
     this.formulaBuffer.set(value);
+  }
+
+  
+
+  private get id(): string | null { return this.sheetDoc()?.id ?? null; }
+  async loadCollaborators() {
+    const id = this.id; if (!id) { this.shareRows.set([]); return; }
+    try {
+      const res = await fetch(`/v1/sheets/${encodeURIComponent(id)}/collaborators`, { credentials: 'include' });
+      const j = await res.json();
+      const rows = (j?.data || []) as any[];
+      this.shareRows.set(rows.map(r => ({ userId: r.userId || r.user_id, role: (r.role||'viewer') })));
+    } catch { this.shareRows.set([]); }
+  }
+  async addCollaborator() {
+    const id = this.id; if (!id) return;
+    const userId = this.shareUserId().trim(); if (!userId) return;
+    const role = this.shareRole();
+    await fetch(`/v1/sheets/${encodeURIComponent(id)}/collaborators`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId, role }) });
+    this.shareUserId.set('');
+    await this.loadCollaborators();
+  }
+  async removeCollaborator(uid: string) {
+    const id = this.id; if (!id) return;
+    await fetch(`/v1/sheets/${encodeURIComponent(id)}/collaborators?user_id=${encodeURIComponent(uid)}`, { method: 'DELETE', credentials: 'include' });
+    await this.loadCollaborators();
   }
 
   onFormulaKeydown(event: KeyboardEvent): void {
@@ -147,8 +178,8 @@ export class SheetPageComponent implements OnInit, OnDestroy {
         window.print();
         break;
       case 'share':
-        // Placeholder for the upcoming collaboration dialog
-        alert('Sharing UI coming soon');
+        this.shareOpen.set(true);
+        await this.loadCollaborators();
         break;
       case 'history':
         alert('Version history coming soon');

@@ -1,5 +1,9 @@
+@import "https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined";
 @import "tailwindcss";
-@custom-variant dark (&:where(.dark, .dark *));
+
+
+
+
 
 /* Marching ants selection border */
 .selection-ants {
@@ -17,9 +21,6 @@
   0% { background-position: 0 0, 100% 0, 0 100%, 0 0; }
   100% { background-position: -8px 0, 100% -8px, 8px 100%, 0 8px; }
 }
-@import "https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined";
-@import "tailwindcss";
-@custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
   --color-bg-light-start: #eff6ff; --color-bg-light-end: #f8fafc;

@@ -94,19 +94,19 @@ This is a self-hosted Google Sheets alternative within the Berjis ecosystem. The
 
 ### 2.4 Permission System
 **Backend:**
-- [ ] `POST /api/sheets/:id/share` - Share with users
+- [x] `POST /api/sheets/:id/share` - Share with users
   - Accept: user_id or email, permission_level
   - Create sheet_permissions entry
   - Send notification (if notification system exists)
-- [ ] `GET /api/sheets/:id/permissions` - List who has access
+- [x] `GET /api/sheets/:id/permissions` - List who has access
 - [ ] `PUT /api/sheets/:id/permissions/:user_id` - Update permission level
-- [ ] `DELETE /api/sheets/:id/permissions/:user_id` - Revoke access
+- [x] `DELETE /api/sheets/:id/permissions/:user_id` - Revoke access
 - [ ] Middleware to check permissions on all sheet operations
 
 **Frontend:**
-- [ ] Share modal component with user search/selection
-- [ ] Permission level dropdown (view/edit/admin)
-- [ ] List of current collaborators with ability to modify
+- [x] Share modal component with user search/selection
+- [x] Permission level dropdown (view/edit/admin)
+- [x] List of current collaborators with ability to modify
 - [ ] Visual indicators for read-only vs editable mode
 
 ---

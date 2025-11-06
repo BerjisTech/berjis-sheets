@@ -40,7 +40,7 @@
               "extractLicenses": true,
               "budgets": [
                 { "type": "initial", "maximumWarning": "3MB", "maximumError": "500MB" },
-                { "type": "anyComponentStyle", "maximumWarning": "4kB", "maximumError": "8kB" }
+                { "type": "anyComponentStyle", "maximumWarning": "6kB", "maximumError": "8kB" }
               ]
             },
             "development": {

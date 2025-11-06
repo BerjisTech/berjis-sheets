@@ -49,6 +49,37 @@
     </ng-container>
   </nav>
 
+  <!-- Share modal -->
+  <div *ngIf="shareOpen()" class="fixed inset-0 z-[70000] flex items-center justify-center bg-black/30">
+    <div class="w-[520px] max-w-[95vw] rounded-xl bg-white p-4 shadow-xl">
+      <div class="flex items-center justify-between">
+        <h3 class="text-base font-semibold">Share</h3>
+        <button class="text-slate-500" (click)="shareOpen.set(false)">✕</button>
+      </div>
+      <div class="mt-3 space-y-2">
+        <div class="flex gap-2">
+          <input class="flex-1 rounded border border-slate-300 px-2 py-1 text-sm" placeholder="User ID (UUID)" [ngModel]="shareUserId()" (ngModelChange)="shareUserId.set($event)" />
+          <select class="rounded border border-slate-300 px-2 py-1 text-sm" [ngModel]="shareRole()" (ngModelChange)="shareRole.set($event)">
+            <option value="viewer">Viewer</option>
+            <option value="commenter">Commenter</option>
+            <option value="editor">Editor</option>
+          </select>
+          <button class="rounded bg-blue-700 px-3 py-1 text-sm font-medium text-white" (click)="addCollaborator()">Add</button>
+        </div>
+        <div class="max-h-[240px] overflow-y-auto rounded border">
+          <div *ngFor="let r of shareRows()" class="flex items-center justify-between border-b px-3 py-2 text-sm">
+            <div>
+              <div class="font-medium">{{ r.userId }}</div>
+              <div class="text-xs text-slate-500">{{ r.role | titlecase }}</div>
+            </div>
+            <button class="rounded border px-2 py-1 text-xs" (click)="removeCollaborator(r.userId)">Remove</button>
+          </div>
+          <div *ngIf="!shareRows().length" class="px-3 py-2 text-xs text-slate-500">No collaborators yet.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="sheet-formula" role="region" aria-label="Formula editor">
     <div class="sheet-formula__label">fx</div>
     <input

@@ -98,9 +98,10 @@ func New(opts Options) *fiber.App {
 			return c.Status(401).JSON(fiber.Map{"success": false})
 		}
 		statuses := c.Query("status", "active")
-		q := `SELECT id, user_id, title, COALESCE(data,'null'::jsonb) AS data, status, created_at, updated_at FROM sheets
-              WHERE user_id=$1 AND status = ANY(string_to_array($2, ','))
-              ORDER BY updated_at DESC`
+		q := `SELECT id, user_id, title, COALESCE(data,'null'::jsonb) AS data, status, created_at, updated_at FROM sheets s
+              WHERE (s.user_id=$1 OR EXISTS (SELECT 1 FROM sheet_collaborators c WHERE c.sheet_id=s.id AND c.user_id=$1))
+                AND s.status = ANY(string_to_array($2, ','))
+              ORDER BY s.updated_at DESC`
 		out := []Sheet{}
 		if err := opts.DB.Select(&out, q, uid, statuses); err != nil {
 			return c.Status(500).JSON(fiber.Map{"success": false, "message": err.Error()})
@@ -119,7 +120,8 @@ func New(opts Options) *fiber.App {
 		}
 		id := c.Params("id")
 		var s Sheet
-		if err := opts.DB.Get(&s, `SELECT id, user_id, title, COALESCE(data,'null'::jsonb) AS data, status, created_at, updated_at FROM sheets WHERE id=$1 AND user_id=$2`, id, uid); err != nil {
+		if err := opts.DB.Get(&s, `SELECT id, user_id, title, COALESCE(data,'null'::jsonb) AS data, status, created_at, updated_at FROM sheets s
+            WHERE s.id=$1 AND (s.user_id=$2 OR EXISTS (SELECT 1 FROM sheet_collaborators c WHERE c.sheet_id=s.id AND c.user_id=$2))`, id, uid); err != nil {
 			return c.Status(404).JSON(fiber.Map{"success": false, "message": err.Error()})
 		}
 		return c.JSON(fiber.Map{"success": true, "data": s})
@@ -174,7 +176,9 @@ func New(opts Options) *fiber.App {
 		var s Sheet
 		if err := opts.DB.Get(&s, `UPDATE sheets SET
             title = NULLIF($1,''), data = NULLIF($2,'null'::jsonb), status = COALESCE(NULLIF($3,''), status), updated_at = now()
-            WHERE id=$4 AND user_id=$5
+            WHERE id=$4 AND (
+              user_id=$5 OR EXISTS (SELECT 1 FROM sheet_collaborators sc WHERE sc.sheet_id=$4 AND sc.user_id=$5 AND sc.role='editor')
+            )
             RETURNING id, user_id, title, COALESCE(data,'null'::jsonb) AS data, status, created_at, updated_at`, optStr(in.Title), defaultJSON(in.Data), optStr(in.Status), id, uid); err != nil {
 			return c.Status(404).JSON(fiber.Map{"success": false, "message": err.Error()})
 		}
@@ -184,6 +188,87 @@ func New(opts Options) *fiber.App {
 	app.Post("/v1/sheets/:id/archive", func(c *fiber.Ctx) error { return setStatus(opts, c, "archived") })
 	app.Post("/v1/sheets/:id/restore", func(c *fiber.Ctx) error { return setStatus(opts, c, "active") })
 	app.Delete("/v1/sheets/:id", func(c *fiber.Ctx) error { return setStatus(opts, c, "deleted") })
+
+	// Collaborators (owner-managed)
+	app.Get("/v1/sheets/:id/collaborators", func(c *fiber.Ctx) error {
+		if opts.DB == nil {
+			return c.Status(500).JSON(fiber.Map{"success": false})
+		}
+		uid, err := getUID(c)
+		if err != nil {
+			return c.Status(401).JSON(fiber.Map{"success": false})
+		}
+		id := c.Params("id")
+		var owner string
+		if err := opts.DB.Get(&owner, `SELECT user_id FROM sheets WHERE id=$1`, id); err != nil {
+			return fiber.ErrNotFound
+		}
+		if owner != uid {
+			return fiber.ErrForbidden
+		}
+		type row struct {
+			UserID, Role, InvitedBy string
+			CreatedAt               time.Time
+		}
+		rows := []row{}
+		_ = opts.DB.Select(&rows, `SELECT user_id, role, invited_by, created_at FROM sheet_collaborators WHERE sheet_id=$1 ORDER BY created_at DESC`, id)
+		return c.JSON(fiber.Map{"success": true, "data": rows})
+	})
+	app.Post("/v1/sheets/:id/collaborators", func(c *fiber.Ctx) error {
+		if opts.DB == nil {
+			return c.Status(500).JSON(fiber.Map{"success": false})
+		}
+		uid, err := getUID(c)
+		if err != nil {
+			return c.Status(401).JSON(fiber.Map{"success": false})
+		}
+		id := c.Params("id")
+		var owner string
+		if err := opts.DB.Get(&owner, `SELECT user_id FROM sheets WHERE id=$1`, id); err != nil {
+			return fiber.ErrNotFound
+		}
+		if owner != uid {
+			return fiber.ErrForbidden
+		}
+		var body struct{ UserID, Role string }
+		if err := c.BodyParser(&body); err != nil {
+			return fiber.ErrBadRequest
+		}
+		role := strings.ToLower(strings.TrimSpace(body.Role))
+		if body.UserID == "" || (role != "viewer" && role != "commenter" && role != "editor") {
+			return fiber.ErrBadRequest
+		}
+		if _, err := opts.DB.Exec(`INSERT INTO sheet_collaborators (sheet_id, user_id, role, invited_by) VALUES ($1,$2,$3,$4)
+		  ON CONFLICT (sheet_id, user_id) DO UPDATE SET role=EXCLUDED.role, updated_at=now()`, id, body.UserID, role, uid); err != nil {
+			return c.Status(500).JSON(fiber.Map{"success": false, "message": err.Error()})
+		}
+		return c.JSON(fiber.Map{"success": true})
+	})
+	app.Delete("/v1/sheets/:id/collaborators", func(c *fiber.Ctx) error {
+		if opts.DB == nil {
+			return c.Status(500).JSON(fiber.Map{"success": false})
+		}
+		uid, err := getUID(c)
+		if err != nil {
+			return c.Status(401).JSON(fiber.Map{"success": false})
+		}
+		id := c.Params("id")
+		var owner string
+		if err := opts.DB.Get(&owner, `SELECT user_id FROM sheets WHERE id=$1`, id); err != nil {
+			return fiber.ErrNotFound
+		}
+		if owner != uid {
+			return fiber.ErrForbidden
+		}
+		userID := strings.TrimSpace(c.Query("user_id"))
+		if userID == "" {
+			return fiber.ErrBadRequest
+		}
+		if _, err := opts.DB.Exec(`DELETE FROM sheet_collaborators WHERE sheet_id=$1 AND user_id=$2`, id, userID); err != nil {
+			return c.Status(500).JSON(fiber.Map{"success": false, "message": err.Error()})
+		}
+		return c.JSON(fiber.Map{"success": true})
+	})
 
 	return app
 }
@@ -236,7 +321,9 @@ func setStatus(opts Options, c *fiber.Ctx, status string) error {
 	}
 	id := c.Params("id")
 	var s Sheet
-	if err := opts.DB.Get(&s, `UPDATE sheets SET status=$1, updated_at=now() WHERE id=$2 AND user_id=$3
+	if err := opts.DB.Get(&s, `UPDATE sheets SET status=$1, updated_at=now() WHERE id=$2 AND (
+        user_id=$3 OR EXISTS(SELECT 1 FROM sheet_collaborators sc WHERE sc.sheet_id=$2 AND sc.user_id=$3 AND sc.role='editor')
+      )
         RETURNING id, user_id, title, COALESCE(data,'null'::jsonb) AS data, status, created_at, updated_at`, status, id, uid); err != nil {
 		return c.Status(404).JSON(fiber.Map{"success": false, "message": err.Error()})
 	}
