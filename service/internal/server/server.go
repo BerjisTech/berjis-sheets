@@ -49,7 +49,7 @@ func New(opts Options) *fiber.App {
 	app.Get("/v1/health", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"success": true}) })
 
 	getUID := func(c *fiber.Ctx) (string, error) {
-		req, _ := http.NewRequest("GET", strings.TrimRight(opts.CoreAPIBase, "/")+"/v1/auth/verify", nil)
+		req, _ := http.NewRequest(http.MethodPost, strings.TrimRight(opts.CoreAPIBase, "/")+"/v1/auth/verify", nil)
 		if v := c.Get("Authorization"); v != "" {
 			req.Header.Set("Authorization", v)
 		}
@@ -278,7 +278,7 @@ func setStatus(opts Options, c *fiber.Ctx, status string) error {
 		return c.Status(500).JSON(fiber.Map{"success": false})
 	}
 	uid, err := func() (string, error) {
-		req, _ := http.NewRequest("GET", strings.TrimRight(opts.CoreAPIBase, "/")+"/v1/auth/verify", nil)
+		req, _ := http.NewRequest(http.MethodPost, strings.TrimRight(opts.CoreAPIBase, "/")+"/v1/auth/verify", nil)
 		if v := c.Get("Authorization"); v != "" {
 			req.Header.Set("Authorization", v)
 		}
