@@ -1,12 +1,13 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
+import { environment } from '../environments/environment';
 import { Workbook } from './workbench/workbook.model';
 
 export type SheetStatus = 'active'|'archived'|'deleted';
 export interface SheetDoc { id: string; title?: string; data?: any; status: SheetStatus; createdAt: string; updatedAt: string }
 
-const API_BASE = 'https://sheets-api.berjis.tech';
+const API_BASE = normalizeBase(environment.sheetsApiBase || 'https://sheets-api.berjis.tech');
 const STORAGE_KEY = 'berjis-sheets';
 
 @Injectable({ providedIn: 'root' })
@@ -118,4 +119,9 @@ export function defaultWorkbook(title?: string): Workbook {
     activeSheetId: sheetId,
     updatedAt: new Date().toISOString()
   };
+}
+
+function normalizeBase(base: string): string {
+  if (!base) return '';
+  return base.replace(/\/+$/, '');
 }
