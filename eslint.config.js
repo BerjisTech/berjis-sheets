@@ -5,7 +5,7 @@ const angular = require("angular-eslint");
 
 module.exports = tseslint.config(
   {
-    ignores: ["dist/**", "src/app/pages/sheet/**", "src/app/workbench/**"]
+    ignores: ["dist/**"]
   },
   {
     files: ["**/*.ts"],
@@ -34,6 +34,16 @@ module.exports = tseslint.config(
         },
       ],
     },
+  },
+  {
+    files: ["src/app/pages/sheet/**/*.ts", "src/app/workbench/**/*.ts"],
+    rules: {
+      "@typescript-eslint/no-explicit-any": "off",
+      "@angular-eslint/prefer-inject": "off",
+      "@typescript-eslint/no-unused-vars": "off",
+      "prefer-const": "off",
+      "@typescript-eslint/array-type": "off"
+    }
   },
   {
     files: ["**/*.html"],
