@@ -1,4 +1,9 @@
-const w = typeof window !== 'undefined' ? (window as any) : {};
+type SheetsWindow = Window & {
+  __BERJIS_API__?: string;
+  __SHEETS_API__?: string;
+};
+
+const w: SheetsWindow | undefined = typeof window !== 'undefined' ? (window as SheetsWindow) : undefined;
 
 export const environment = {
   production: true,

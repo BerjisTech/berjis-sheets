@@ -1,4 +1,4 @@
-import { Component } from '@angular/core';
+import { Component, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { CoreAuthService } from '@berjis/angular-auth';
@@ -13,7 +13,10 @@ import { SheetsService, SheetDoc } from '../../sheets.service';
 export class HomePageComponent {
   authed: boolean | null = null;
   recents: SheetDoc[] = [];
-  constructor(private auth: CoreAuthService, private sheets: SheetsService) { this.init(); }
+  private readonly auth = inject(CoreAuthService);
+  private readonly sheets = inject(SheetsService);
+
+  constructor() { this.init(); }
   async init() {
     try {
       const session = await this.auth.ensureAuth({ maxAgeMs: 1500 });

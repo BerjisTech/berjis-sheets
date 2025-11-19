@@ -1,14 +1,15 @@
-import { Injectable } from '@angular/core';
+import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { environment } from '../environments/environment';
 import { Workbook } from './workbench/workbook.model';
 
 export type SheetStatus = 'active'|'archived'|'deleted';
-export interface SheetDoc { id: string; title?: string; data?: any; status: SheetStatus; createdAt: string; updatedAt: string }
+export interface SheetDoc { id: string; title?: string; data?: Workbook | null; status: SheetStatus; createdAt: string; updatedAt: string }
 
 const API_BASE = normalizeBase(environment.sheetsApiBase || 'https://sheets-api.berjis.tech');
 const STORAGE_KEY = 'berjis-sheets';
+interface ApiResponse<T> { data: T; }
 
 @Injectable({ providedIn: 'root' })
 export class SheetsService {
@@ -19,7 +20,9 @@ export class SheetsService {
   lastSavedAt: string | null = null;
   lastError: string | null = null;
 
-  constructor(private http: HttpClient) { this.load(); }
+  private readonly http = inject(HttpClient);
+
+  constructor() { this.load(); }
   private load() { try { const raw = localStorage.getItem(STORAGE_KEY); this.cache = raw ? JSON.parse(raw) : {}; } catch { this.cache = {}; } }
   private persist() { localStorage.setItem(STORAGE_KEY, JSON.stringify(this.cache)); }
   private now() { return new Date().toISOString(); }
@@ -27,7 +30,7 @@ export class SheetsService {
   async list(status: SheetStatus[] = ['active']): Promise<SheetDoc[]> {
     if (this.preferRemote) {
       try {
-        const res = await firstValueFrom(this.http.get<any>(`${API_BASE}/v1/sheets`, { params: { status: status.join(',') }, withCredentials: true }));
+        const res = await firstValueFrom(this.http.get<ApiResponse<SheetDoc[]>>(`${API_BASE}/v1/sheets`, { params: { status: status.join(',') }, withCredentials: true }));
         const rows: SheetDoc[] = res?.data || [];
         for (const s of rows) this.cache[s.id] = s; this.persist();
         this.preferRemote = true; this.syncMode='remote'; this.lastError=null; return rows;
@@ -39,7 +42,7 @@ export class SheetsService {
   async fetch(id: string): Promise<SheetDoc|undefined> {
     if (this.preferRemote) {
       try {
-        const res = await firstValueFrom(this.http.get<any>(`${API_BASE}/v1/sheets/${id}`, { withCredentials: true }));
+        const res = await firstValueFrom(this.http.get<ApiResponse<SheetDoc>>(`${API_BASE}/v1/sheets/${id}`, { withCredentials: true }));
         const s: SheetDoc = res?.data; if (s) { this.cache[s.id] = s; this.persist(); }
         this.preferRemote = true; this.syncMode='remote'; this.lastError=null; return s;
       } catch (e) { this.switchToLocal(e); }
@@ -59,7 +62,7 @@ export class SheetsService {
     if (this.preferRemote) {
       try {
         this.beginSave();
-        const res = await firstValueFrom(this.http.post<any>(`${API_BASE}/v1/sheets`, { title: tmp.title || undefined, data: tmp.data }, { withCredentials: true }));
+        const res = await firstValueFrom(this.http.post<ApiResponse<SheetDoc>>(`${API_BASE}/v1/sheets`, { title: tmp.title || undefined, data: tmp.data }, { withCredentials: true }));
         const s: SheetDoc = res.data; this.cache[s.id] = s; this.persist(); this.endSave(); return s;
       } catch (e) { this.endSave(e); this.switchToLocal(e); }
     }
@@ -73,7 +76,7 @@ export class SheetsService {
     if (this.preferRemote) {
       try {
         this.beginSave();
-        const res = await firstValueFrom(this.http.put<any>(`${API_BASE}/v1/sheets/${s.id}`, { title: s.title || undefined, data: s.data }, { withCredentials: true }));
+        const res = await firstValueFrom(this.http.put<ApiResponse<SheetDoc>>(`${API_BASE}/v1/sheets/${s.id}`, { title: s.title || undefined, data: s.data }, { withCredentials: true }));
         const out: SheetDoc = res.data; this.cache[out.id] = out; this.persist(); this.endSave(); return out;
       } catch (e) { this.endSave(e); this.switchToLocal(e); }
     }
@@ -85,8 +88,15 @@ export class SheetsService {
   async softDelete(id: string) { if (this.preferRemote) { try { this.beginSave(); await firstValueFrom(this.http.delete(`${API_BASE}/v1/sheets/${id}`, { withCredentials: true })); this.endSave(); } catch (e) { this.endSave(e); this.switchToLocal(e); } } const s=this.cache[id]; if (s){ s.status='deleted'; s.updatedAt=this.now(); this.persist(); } }
 
   private beginSave(){ this.isSaving=true; this.lastError=null; }
-  private endSave(err?: any){ this.isSaving=false; if (err) this.lastError = err?.message||'sync error'; else this.lastSavedAt=this.now(); }
-  private switchToLocal(e?: any){ this.preferRemote=false; this.syncMode='local'; this.lastError = e?.message || 'offline, saving locally'; }
+  private endSave(err?: unknown){
+    this.isSaving=false;
+    if (err) this.lastError = toErrorMessage(err) || 'sync error'; else this.lastSavedAt=this.now();
+  }
+  private switchToLocal(error?: unknown){
+    this.preferRemote=false;
+    this.syncMode='local';
+    this.lastError = toErrorMessage(error) || 'offline, saving locally';
+  }
   private uuid(): string { return 's_' + Math.random().toString(36).slice(2) + Date.now().toString(36); }
 }
 
@@ -124,4 +134,11 @@ export function defaultWorkbook(title?: string): Workbook {
 function normalizeBase(base: string): string {
   if (!base) return '';
   return base.replace(/\/+$/, '');
+}
+
+function toErrorMessage(error: unknown): string {
+  if (!error) return '';
+  if (typeof error === 'string') return error;
+  if (error instanceof Error) return error.message;
+  return '';
 }

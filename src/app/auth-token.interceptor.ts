@@ -10,7 +10,7 @@ export const authTokenInterceptor: HttpInterceptorFn = (req, next) => {
   let attemptedRefresh = false;
 
   return next(req).pipe(
-    catchError((err: any) => {
+    catchError((err: unknown) => {
       const httpError = err as HttpErrorResponse;
       if (!attemptedRefresh && serviceBase && req.url.startsWith(serviceBase) && httpError.status === 401) {
         attemptedRefresh = true;
